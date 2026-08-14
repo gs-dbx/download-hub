@@ -1,0 +1,14 @@
+resources:
+  apps:
+    download_hub:
+      name: download-hub
+      description: "Data Download Hub — configurable gold-view download app (FastAPI + USWDS)"
+      source_code_path: ../src/app          # relative to resources/
+      user_api_scopes:
+        - sql                               # OBO scope: query gold table AS THE USER
+      resources:
+        - name: app_warehouse
+          description: "Serverless SQL warehouse for OBO gold-table reads"
+          sql_warehouse:
+            id: ${var.warehouse_id}         # set via databricks.yml var.warehouse_id
+            permission: CAN_USE

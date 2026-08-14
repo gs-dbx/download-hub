@@ -1,0 +1,288 @@
+# GitHub Copilot Instructions for Data Download Hub
+
+## What is this?
+
+The **Data Download Hub** is a configurable, server-rendered FastAPI application that serves reports from any SQL table via a clean, search-friendly web UI with per-user downloads gated by Databricks group membership.
+
+- **100% config-driven.** New reports are added by inserting rows into the `report_config` registry table — zero code change or redeploy required.
+- **Per-user cached snapshots.** Filters, search, and pagination run server-side over a date-scoped in-memory snapshot (OBO as the signed-in user).
+- **Audit-first downloads.** Every download writes exactly one audit row *before* the file is returned; if the audit fails, the download is blocked.
+- **Fully air-gapped.** All dependencies and assets ship committed in `src/app/wheelhouse/` and `static/`; no CDN, no external URLs.
+
+## Architecture
+
+### Request flow
+
+1. Browser → FastAPI route
+2. Extract OBO token from `X-Forwarded-Access-Token` header
+3. For data reads: build a per-request `WorkspaceClient` with `auth_type="pat"` and read AS THE USER via Statement Execution API
+4. For registry reads: use a cached (TTL ~300s) service-principal client
+5. Per-user snapshot cache: select display + filter columns, date-scoped, cache by (user_email, report_id, date)
+6. Apply filters/search/pagination server-side over the cached snapshot
+7. Render `report.html` full page or `_rows.html` fragment (HTMX-driven table updates)
+8. Download: re-check group membership (defense in depth), validate form, export ALL matching rows from cache, write audit row (as SP), return file
+
+### Module map — pure vs. I/O boundary
+
+**`src/app/main.py`** — the ONLY I/O boundary (AsyncIO, SDK calls, Jinja templates, app.mount, routes)
+- `index()` → redirect to first report
+- `report_page()` → full page render (OBO token extract, snapshot read, filter defaults)
+- `report_table()` → fragment render (filter/search/paginate apply, header injection)
+- `download()` → export (group re-check, form validate, file build, audit write, response)
+- `_run_sql()` / `_run_sql_sp_query()` / `_run_sql_sp()` → wrapped SDK calls with `asyncio.to_thread`
+
+**Pure modules** (no SDK, no async, fully unit-testable in pytest alone):
+- `config.py` — app branding helpers (`app_name`, `app_logo`, `app_org_name`, `resolve_disclaimer`); kill-switch parser (`downloads_enabled`)
+- `auth.py` — token/email extraction, group membership check, effective-group resolution
+- `cache.py` — in-memory LRU snapshot cache, `SnapshotCache.get/put`; filter/search/paginate logic; distinct-value extraction
+- `reports.py` — `ReportConfig` dataclass, parse/build generic query builders, injection validation (identifier allowlist regex)
+- `exports.py` — CSV/XLSX builders, disclaimer embedding, filename generation
+- `render.py` — display-column cell formatters, header builder, haystack concatenation for search
+- `shaping.py` — cell formatters (int, pct, date)
+- `audit.py` — audit-row builder, parameterized INSERT builder
+
+### Caching model
+
+- **Per-user snapshot:** bounded LRU (max 128 entries). Key = (user_email, report_id, date). Evicted on `refresh=1` query param or cache-key pressure.
+- **Report registry:** in-process TTL tuple. Refreshed at most every 300 seconds. Admin can force immediate refresh by restarting the app.
+
+### Auth model
+
+- **OBO reads:** header `X-Forwarded-Access-Token` → `WorkspaceClient(auth_type="pat")` → runs AS THE USER
+- **SP writes + registry reads:** injected `DATABRICKS_CLIENT_ID` / `SECRET` → `WorkspaceClient()` (no explicit auth) → runs AS THE APP
+- **Download group check:** `current_user.me()` OBO call → check group display names against effective download group
+- No fallback: missing OBO token → 401 (no CLI profile, no mock data)
+
+### Configuration
+
+All config comes from environment variables (app.yaml):
+- `DATABRICKS_WAREHOUSE_ID` — warehouse to execute statements on
+- `APP_CATALOG`, `APP_SCHEMA` — Unity Catalog location of `report_config`, `download_audit`
+- `APP_NAME`, `APP_ORG_NAME`, `APP_LOGO` — branding (white-label by config)
+- `DOWNLOADS_ENABLED` — global kill switch (false/0/no/off → disabled; default true)
+- `DOWNLOAD_DISCLAIMER` — custom data-handling notice (optional; falls back to exports.DEFAULT_DISCLAIMER)
+- `APP_VERSION` — semantic version (for audit logging)
+
+### Offline / air-gap
+
+- **All wheels committed** in `src/app/wheelhouse/` (linux/CPython-3.11)
+- **All front-end assets local** — USWDS, color overlay, logo, app.js
+- **No CDN ever.** Every link in `templates/` and `static/` is a `/static/...` path
+- **Guard test** (`tests/test_branding_guards.py`) fails if any external URL appears in authored templates/CSS/JS
+- **Install:** `pip install --no-index --find-links src/app/wheelhouse -r requirements.lock`
+
+## How to write good code
+
+### Keep logic pure and I/O at the boundary
+
+**Good:** A pure function in `cache.py`:
+```python
+def apply_filters(rows: list[dict], selected_filters: dict[str, str]) -> list[dict]:
+    """Return rows matching all selected filters."""
+    for field, value in selected_filters.items():
+        if value:
+            rows = [r for r in rows if r.get(field) == value]
+    return rows
+```
+
+**Bad:** Calling the SDK inside the function — put that in `main.py` only.
+
+### Validate identifiers strictly; bind values always
+
+**Good** (from `reports.py`):
+```python
+# Identifiers from config — validated via allowlist regex
+fqn = validate_fqn(source_fqn)  # raises ValueError if bad
+date_field = validate_identifier(date_field)
+
+# Values — always bound as :named params, never interpolated
+params.append({"name": "report_date", "value": report_date, "type": "TIMESTAMP"})
+sql += f" WHERE {date_field} = :report_date"  # identifier interpolated, value bound
+```
+
+### Test without the SDK
+
+Every module except `main.py` is importable in a pytest-only `.venv` (no SDK, no Databricks):
+```bash
+cd download_hub
+python -m venv .venv-test
+. .venv-test/bin/activate
+pip install pytest
+PYTHONPATH=src python -m pytest tests/ -q
+```
+
+The test suite is fast and runs offline.
+
+## How to add a new report
+
+**No code change. Add one row to `report_config` — that's it.**
+
+1. Insert/MERGE a row into `{APP_CATALOG}.{APP_SCHEMA}.report_config`:
+
+```sql
+INSERT INTO main.default.report_config VALUES (
+  'new_report',                          -- report_id (stable key, bare identifier)
+  'New Report Title',                    -- title (user-facing)
+  'main.default.my_source_table',        -- source_fqn (1–3 dotted parts, each bare identifier)
+  'report_date',                         -- date_field (column to scope by)
+  '[{"name":"col1","label":"Column 1","format":"text"},{"name":"col2","label":"Count","format":"int"}]',  -- columns_json
+  '[{"field":"region","label":"Region"}]',  -- filters_json (optional; may be empty)
+  'col1',                                -- order_by (optional; NULL for no sort)
+  2,                                     -- display_order
+  true,                                  -- enabled
+  NULL,                                  -- download_group (NULL → code default; set to a Databricks group name to gate to that group)
+  current_timestamp()                    -- updated_at
+)
+```
+
+The app picks it up within ~5 minutes (TTL refresh). Restart to pick it up immediately.
+
+### Column JSON format
+
+```json
+[
+  {"name": "column_name", "label": "Display Name", "format": "text"},
+  {"name": "count_col", "label": "Count", "format": "int"},
+  {"name": "pct_col", "label": "% Change", "format": "pct"}
+]
+```
+
+- `name` — source column (bare SQL identifier)
+- `label` — header + export header
+- `format` — `text` (raw), `int` (thousands-separated), or `pct` (signed 1-decimal %; NULL → `—`)
+
+### Filter JSON format
+
+```json
+[
+  {"field": "region", "label": "Region"},
+  {"field": "quarter", "label": "Quarter"}
+]
+```
+
+- `field` — source column to filter on (MUST be projectable — it's included in the snapshot SELECT)
+- `label` — dropdown label
+
+**Important:** Every filter field MUST exist on `source_fqn` or the OBO read will fail.
+
+## How to rebrand (5 minutes)
+
+Edit `src/app/app.yaml` — no code change:
+
+```yaml
+env:
+  - name: APP_NAME
+    value: "Your App Name"
+  - name: APP_ORG_NAME
+    value: "Your Organization"
+  - name: APP_LOGO
+    value: "/static/img/your-logo.svg"   # must be a /static path (no CDN)
+  - name: DOWNLOADS_ENABLED
+    value: "true"
+  - name: DOWNLOAD_DISCLAIMER
+    value: |
+      Your custom data-handling notice.
+      Multi-line OK.
+```
+
+Then redeploy:
+```bash
+databricks bundle deploy -t dev
+databricks bundle run download_hub -t dev
+```
+
+## Hard rules — don't break these
+
+### Air-gap: no external URLs in authored front-end
+
+Every link in `templates/`, `static/css/`, and `static/js/` must be a local `/static/...` path. The guard test (`tests/test_branding_guards.py`) fails if any external URL appears (e.g., `https://`, `//`, `cdn.`, `unpkg.`). This is non-negotiable for air-gap compliance.
+
+**Bad:**
+```html
+<link rel="stylesheet" href="https://unpkg.com/uswds@3.0.0/dist/css/uswds.min.css">
+```
+
+**Good:**
+```html
+<link rel="stylesheet" href="/static/uswds/css/uswds.min.css">
+```
+
+### No secrets in code
+
+Credentials come from env (`DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_SECRET`) or headers (`X-Forwarded-Access-Token`). Never commit tokens, passwords, or API keys.
+
+### Keep wheelhouse offline-install intact
+
+The committed `src/app/wheelhouse/` directory is the source for offline installs. Do NOT add wheels that require internet access or external index lookups. Run `scripts/build_wheelhouse.sh` to refresh after updating `requirements.txt`.
+
+### Match existing code style
+
+- **Indentation:** 2 spaces in `src/app/` (FastAPI modules)
+- **Line length:** ~100 characters (visible in multi-line calls)
+- **Imports:** group by stdlib, third-party, local; alphabetize within groups
+- **Type hints:** use them (functions should have return type hints)
+- **Docstrings:** module-level (describe purpose), function-level (Args, Returns, Raises)
+- **Tests:** pure functions only; no SDK, no network; use pytest fixtures
+
+### Keep tests green
+
+```bash
+cd download_hub
+PYTHONPATH=src .venv/bin/python -m pytest -q
+```
+
+Current baseline: 146 passed, 1 skipped. Every code change must maintain or improve this. The branding guard test ensures no external URLs leak into committed templates/CSS/JS.
+
+## Gotchas
+
+1. **`asyncio.to_thread` required for SDK calls in async routes.** The Databricks SDK is fully synchronous; inside an `async def` route, wrap every SDK call with `await asyncio.to_thread(...)` so it doesn't block the event loop.
+
+2. **OBO token pinning: `auth_type="pat"` is mandatory.** The Apps runtime injects both the user's OAuth token (in the header) AND the app SP's credentials (in the environment). Without `auth_type="pat"`, the SDK sees both and refuses to initialize. Pinning `pat` forces the user's token to win, giving you OBO.
+
+3. **Per-user snapshot cache is keyed by email.** If user emails change or are mutable, the cache can return stale data for a different user. The app assumes emails are stable within a session.
+
+4. **Filter fields must exist on the source table.** The snapshot SELECT projects display columns ∪ filter fields. If a filter field doesn't exist on `source_fqn`, the OBO read fails with "column not found".
+
+5. **Every identifier is validated; bad config raises ValueError at query-build time, not runtime.** A typo in `source_fqn`, `date_field`, column names, or filter fields is caught early by the regex validator, which is good — no silent NULL results.
+
+6. **The identifier allowlist is strict: `^[A-Za-z_][A-Za-z0-9_]*$`.** No hyphens, no underscores at the start, no dots. Use this for `source_fqn` parts, `date_field`, column names, filter fields, and `order_by`.
+
+7. **Audit writes are synchronous blocks.** If an audit insert fails for ANY reason, the download is blocked (HTTP 500, no file). This is audit-first and non-negotiable.
+
+8. **The report registry is TTL-cached for ~300s.** After editing `report_config`, the app picks up changes within 5 minutes. To pick up changes immediately, restart the app.
+
+## Testing
+
+```bash
+cd download_hub
+
+# Create a minimal test venv (pytest + typing-extensions only; no SDK needed)
+python3.11 -m venv .venv-test
+source .venv-test/bin/activate
+pip install pytest typing-extensions
+
+# Run tests (pure modules only)
+PYTHONPATH=src python -m pytest tests/ -q
+```
+
+Tests cover config parsing, injection validation, filter/search/pagination, export builders, auth helpers, and the guard rules (no external URLs).
+
+## Deploying
+
+```bash
+cd /path/to/download_hub   # the bundle root (the directory containing databricks.yml)
+
+# Validate
+databricks bundle validate -t dev
+
+# Deploy app + resources
+databricks bundle deploy --target dev
+
+# Seed the daily_metrics table + download_audit (run the seed job)
+databricks bundle run metrics_seed --target dev
+
+# Start the app
+databricks bundle run download_hub --target dev
+```
+
+See `docs/DEPLOY.md` for full details (groups, grants, kill switch, staging promotion).

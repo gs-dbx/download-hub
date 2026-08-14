@@ -1,0 +1,13 @@
+{# _rows.html — the <tr> rows ONLY, no <table>/<tbody> wrapper. #}
+{# Generic (LOCKED DECISION L3): `rows` is a list of pre-rendered cell lists,   #}
+{# each cell a {text, css} dict in ColumnSpec order. The first cell of a row is #}
+{# the row header. report.html includes it for the initial render and the      #}
+{# /report/{id}/table endpoint renders it alone for fragment swaps.            #}
+{% for row in rows %}
+<tr>
+  {% for cell in row %}
+  {% if loop.first %}<th scope="row" class="{{ cell.css }}">{{ cell.text }}</th>
+  {% else %}<td class="{{ cell.css }}">{{ cell.text }}</td>{% endif %}
+  {% endfor %}
+</tr>
+{% endfor %}

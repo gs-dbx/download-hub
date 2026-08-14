@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/uswds/css/uswds.min.css">
+  <!-- Local color overlay — MUST load AFTER uswds.min.css to win overlaps. -->
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="/static/uswds/js/uswds-init.min.js"></script>
+</head>
+<body>
+  <!-- USWDS government banner -->
+  <section class="usa-banner" aria-label="Official government website">
+    <div class="usa-accordion">
+      <header class="usa-banner__header">
+        <div class="usa-banner__inner">
+          <div class="grid-col-fill tablet:grid-col-auto">
+            <p class="usa-banner__header-text">
+              An official website of the United States government
+            </p>
+          </div>
+        </div>
+      </header>
+    </div>
+  </section>
+
+  <!--
+    Branded masthead (white). The logo is a LOCAL asset whose path comes from the
+    APP_LOGO env var (default /static/img/logo.svg); the name/alt come from
+    APP_NAME / APP_ORG_NAME. Point APP_LOGO at your own /static/img asset to swap
+    the mark (kept local so the app stays fully offline-capable).
+  -->
+  <header class="app-header">
+    <div class="app-header__inner">
+      <img class="app-header__logo" src="{{ app_logo }}" alt="{{ app_org_name }}">
+      <span class="app-header__app">{{ app_name }}</span>
+    </div>
+  </header>
+
+  <!--
+    Tab nav across the enabled reports (LOCKED DECISION L4). Driven by the
+    nav_reports context list + active_report_id; both default to empty so
+    error.html (which may not supply them) still renders.
+  -->
+  {% if nav_reports|default([]) %}
+  <nav class="app-tabs grid-container" aria-label="Reports">
+    {% for r in nav_reports %}
+    <a class="app-tab {% if r.report_id == active_report_id|default('') %}app-tab--active{% endif %}"
+       href="/report/{{ r.report_id }}">{{ r.title }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  <main id="main-content" class="grid-container usa-section">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="usa-footer usa-footer--slim">
+    <div class="grid-container usa-footer__return-to-top">
+      <p class="font-body-2xs text-base">
+        Synthetic data &mdash; for demonstration only.
+        {% block footer_extra %}{% endblock %}
+      </p>
+    </div>
+  </footer>
+
+  <script src="/static/uswds/js/uswds.min.js" defer></script>
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

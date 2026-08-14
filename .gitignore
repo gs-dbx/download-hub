@@ -1,0 +1,9 @@
+# Offline wheel mirror (src/app/wheelhouse/) IS committed so the app installs with
+# no package index/mirror on the target — see docs/MIGRATION.md. It lives inside
+# src/app/ so the Databricks Apps bundle syncs it with the app. Rebuild with
+# scripts/build_wheelhouse.sh. (Only ignore a scratch build dir if you rename it.)
+
+# Python
+.venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,47 @@
+# requirements.lock — full transitive closure for the Data Download Hub app.
+#
+# This is the OFFLINE MIRROR SOURCE: `scripts/build_wheelhouse.sh` reads it to
+# download every wheel the app needs into `wheelhouse/`, which ops then installs
+# with `pip install --no-index --find-links wheelhouse -r requirements.lock` on
+# the air-gapped target (linux manylinux2014_x86_64, CPython 3.11 — matches the
+# Databricks Apps runtime).
+#
+# Regenerate from a clean virtualenv:
+#   python -m venv /tmp/lockenv && /tmp/lockenv/bin/pip install -r src/app/requirements.txt
+#   /tmp/lockenv/bin/pip freeze > requirements.lock   # then re-add this header
+#
+# Direct dependencies are pinned in src/app/requirements.txt; the rest are the
+# resolved transitive closure captured from the app build.
+
+# --- Direct dependencies ---
+fastapi==0.115.0
+uvicorn==0.30.6
+jinja2==3.1.6
+databricks-sdk==0.33.0
+openpyxl==3.1.5
+python-multipart==0.0.30
+
+# --- Transitive dependencies ---
+annotated-types==0.7.0
+anyio==4.13.0
+certifi==2025.8.3
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.4.1
+cryptography==48.0.0
+et-xmlfile==2.0.0
+google-auth==2.53.0
+h11==0.16.0
+idna==3.17
+MarkupSafe==2.1.5
+pyasn1==0.6.3
+pyasn1-modules==0.4.2
+pycparser==2.23
+pydantic==2.13.4
+pydantic-core==2.46.4
+requests==2.34.2
+sniffio==1.3.1
+starlette==0.38.6
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+urllib3==2.7.0

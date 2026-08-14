@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}{{ report.title }}{% endblock %}
+
+{% block content %}
+{#
+  Generic report page (LOCKED DECISIONS L4/L6/L7). Replaces the hardcoded
+  glance.html: the hero title, toolbar controls, thead, and table body are all
+  driven by the report's config (columns / filters) + the cached snapshot. All
+  data-role hooks + data-report-id are the app.js contract. The generic download
+  partial is included for ANY report when can_download is true.
+#}
+<div class="app-report" data-report-id="{{ report.report_id }}">
+  <div class="app-hero">
+    <h1 class="font-heading-xl app-hero__title">{{ report.title }}</h1>
+    <p class="usa-intro font-body-sm app-hero__sub" data-role="report-updated">
+      {% if fetched_at %}Last updated {{ fetched_at }}{% endif %}
+    </p>
+  </div>
+
+  <div class="app-toolbar">
+    <form class="app-toolbar__filters" onsubmit="return false;">
+      <div class="app-field app-field--search">
+        <label class="usa-label" for="report-search">Search</label>
+        <input class="usa-input" id="report-search" type="search"
+               data-role="report-search" placeholder="Filter results" autocomplete="off">
+      </div>
+      <div class="app-field app-field--date">
+        <label class="usa-label" for="report-date">Report date</label>
+        <select class="usa-select" id="report-date" data-role="report-date">
+          {% for rd in dates %}
+          <option value="{{ rd }}"{% if rd == selected_date %} selected{% endif %}>{{ rd }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% for f in report.filters %}
+      <div class="app-field app-field--filter">
+        <label class="usa-label" for="report-filter-{{ f.field }}">{{ f.label }}</label>
+        <select class="usa-select" id="report-filter-{{ f.field }}"
+                data-role="report-filter" data-field="{{ f.field }}">
+          {% for opt in filter_options[f.field] %}
+          <option value="{{ opt }}"{% if opt == selected_filters[f.field] %} selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endfor %}
+      <div class="app-field app-field--size">
+        <label class="usa-label" for="report-size">Rows</label>
+        <select class="usa-select" id="report-size" data-role="report-size">
+          <option value="25"{% if size == 25 %} selected{% endif %}>25</option>
+          <option value="50"{% if size == 50 %} selected{% endif %}>50</option>
+          <option value="100"{% if size == 100 %} selected{% endif %}>100</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div class="app-field app-field--refresh">
+        <label class="usa-label usa-sr-only" for="report-refresh">Refresh</label>
+        <button type="button" class="usa-button usa-button--outline" id="report-refresh"
+                data-role="report-refresh">Refresh</button>
+      </div>
+    </form>
+    {% if can_download %}
+    <div class="app-toolbar__actions">
+      <a href="#download-modal" class="usa-button app-download-btn"
+         aria-controls="download-modal" data-open-modal>
+        <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+          <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+        </svg>
+        Download data
+      </a>
+    </div>
+    {% endif %}
+  </div>
+
+  <table class="usa-table usa-table--striped usa-table--borderless width-full"
+         data-role="report-table">
+    <caption class="usa-sr-only">{{ report.title }} for {{ selected_date }}</caption>
+    <thead>
+      <tr>
+        {% for h in columns %}
+        <th scope="col" class="{{ h.align }}">{{ h.label }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody id="report-tbody" data-role="report-tbody">
+      {% include "_rows.html" %}
+    </tbody>
+  </table>
+
+  {% if no_access or not rows %}
+  <div class="usa-alert usa-alert--info usa-alert--slim margin-top-2" data-role="report-empty">
+    <div class="usa-alert__body">
+      <p class="usa-alert__text">
+        No data to display &mdash; you may not have access to this report, or no
+        rows match the current filters.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="app-pager" data-role="report-pager"
+       data-total-rows="{{ total_rows }}" data-total-pages="{{ total_pages }}"
+       data-page="{{ page }}">
+    {% if total_pages > 1 %}
+    <span class="app-pager__info">Page {{ page }} of {{ total_pages }} &mdash; {{ total_rows }} rows</span>
+    {% endif %}
+  </div>
+
+  {% if can_download %}
+  {% include "_download.html" %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block footer_extra %}App version {{ app_version }}.{% endblock %}

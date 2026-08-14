@@ -1,0 +1,215 @@
+/*
+ * app.css — local color overlay for the Data Download Hub app.
+ *
+ * Loaded AFTER uswds.min.css so these rules win where they overlap. USWDS's
+ * compiled dist cannot be re-themed via Sass in this air-gapped build, so this
+ * small, well-scoped sheet supplies the palette + a branded header band + table
+ * polish. No external fonts, no CDN — every reference is a local /static path.
+ * Public Sans (bundled with USWDS) is used for text. Retheme by editing the
+ * color tokens below (or ship your own app.css).
+ */
+
+:root {
+  --app-navy: #0b2265;       /* primary deep color */
+  --app-blue: #1a4480;       /* secondary color */
+  --app-accent: #b8860b;     /* restrained accent */
+  --app-surface: #f9fafb;    /* near-white page surface */
+  --app-panel: #ffffff;      /* card / table surface */
+  --app-text: #1b1b1b;       /* dark slate body text */
+  --app-muted: #565c65;      /* muted secondary text */
+  --app-border: #dfe1e2;     /* subtle borders */
+  --app-pos: #1a7f37;        /* positive % change (WCAG AA on white) */
+  --app-neg: #b21d1d;        /* negative % change (WCAG AA on white) */
+}
+
+body {
+  background-color: var(--app-surface);
+  color: var(--app-text);
+}
+
+/* ---- Branded masthead (white, configurable logo) ---- */
+.app-header {
+  background-color: #ffffff;
+  border-bottom: 3px solid var(--app-navy);
+  box-shadow: 0 1px 0 var(--app-border);
+}
+
+.app-header__inner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0.85rem 1rem;
+}
+
+.app-header__logo {
+  height: 44px;
+  width: auto;
+  flex: 0 0 auto;
+  display: block;
+}
+
+/* App name sits to the right of the logo, separated by a thin rule. */
+.app-header__app {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--app-navy);
+  padding-left: 1rem;
+  border-left: 1px solid var(--app-border);
+  line-height: 1.2;
+}
+
+/* ---- Hero title ---- */
+.app-hero {
+  border-left: 6px solid var(--app-accent);
+  padding: 0.25rem 0 0.25rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.app-hero__title {
+  color: var(--app-navy);
+  margin: 0 0 0.25rem 0;
+}
+
+.app-hero__sub {
+  color: var(--app-muted);
+  margin: 0;
+}
+
+/* ---- Table polish ---- */
+.usa-table {
+  background-color: var(--app-panel);
+  border: 1px solid var(--app-border);
+}
+
+.usa-table thead th {
+  background-color: var(--app-navy);
+  color: #ffffff;
+  font-weight: 700;
+  border-bottom: 2px solid var(--app-accent);
+}
+
+.usa-table tbody tr:nth-child(even) {
+  background-color: #f2f5fa;
+}
+
+.usa-table tbody td,
+.usa-table thead th {
+  border-color: var(--app-border);
+}
+
+/* Right-align the numeric columns (2026 / 2025 / % Change). */
+.usa-table td.text-right,
+.usa-table th.text-right,
+.usa-table td.app-num,
+.usa-table td.app-pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Colored % change: green positive, red negative, muted em dash. */
+.app-pct--pos { color: var(--app-pos); font-weight: 600; }
+.app-pct--neg { color: var(--app-neg); font-weight: 600; }
+.app-pct--muted { color: var(--app-muted); }
+
+/* ---- Report tab nav ---- */
+.app-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  border-bottom: 2px solid var(--app-border);
+  margin-top: 1rem;
+  padding-bottom: 0;
+}
+
+.app-tab {
+  display: inline-block;
+  padding: 0.6rem 0.25rem;
+  color: var(--app-blue);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+}
+
+.app-tab:hover {
+  color: var(--app-navy);
+  border-bottom-color: var(--app-border);
+}
+
+.app-tab--active {
+  color: var(--app-navy);
+  border-bottom-color: var(--app-accent);
+}
+
+/* ---- Pager ---- */
+.app-pager {
+  margin-top: 1rem;
+  color: var(--app-muted);
+  font-size: 0.9rem;
+}
+.app-pager__controls {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-left: 0.75rem;
+}
+
+/* Generic filter/size/refresh fields share the search field's flex behavior. */
+.app-field--filter { flex: 0 0 8rem; }
+.app-field--size   { flex: 0 0 6rem; }
+.app-field--refresh { flex: 0 0 auto; justify-content: flex-end; }
+.app-field--refresh .usa-button { margin-top: 0.25rem; }
+
+/* ---- Control bar: filters left, Download action right, one aligned row ---- */
+.app-toolbar {
+  display: flex;
+  align-items: flex-end;      /* bottom-align the button with the inputs */
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin: 0 0 1.25rem 0;
+}
+
+.app-toolbar__filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 1rem;
+  flex: 1 1 auto;
+  margin: 0;                  /* override usa-form spacing */
+  max-width: none;
+}
+
+.app-field {
+  display: flex;
+  flex-direction: column;
+}
+/* USWDS labels add top margin; zero it so fields bottom-align cleanly. */
+.app-field .usa-label { margin-top: 0; }
+.app-field .usa-input,
+.app-field .usa-select { margin-top: 0.25rem; width: 100%; max-width: 100%; }
+
+.app-field--search { flex: 1 1 18rem; }
+.app-field--date   { flex: 0 0 15rem; }   /* room for "2026-01-12 00:00:00" */
+
+.app-toolbar__actions {
+  flex: 0 0 auto;
+  padding-bottom: 0.1rem;
+}
+
+/* Accent-colored, icon-leading Download button (navy with gold hover). */
+.app-download-btn {
+  background-color: var(--app-navy);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.app-download-btn:hover {
+  background-color: var(--app-blue);
+}
+.app-download-btn .usa-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: currentColor;
+}

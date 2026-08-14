@@ -1,0 +1,11 @@
+resources:
+  jobs:
+    metrics_seed:
+      name: "[${bundle.target}] download_hub — daily metrics seed"
+      tasks:
+        - task_key: generate
+          notebook_task:
+            notebook_path: ../src/notebooks/generate_daily_metrics.py   # relative to resources/
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}

@@ -1,0 +1,10 @@
+# Offline install: resolve strictly from the committed local wheelhouse/ (no PyPI/mirror).
+# Paths are relative to this requirements.txt (the deployed app source root).
+--no-index
+--find-links ./wheelhouse
+fastapi==0.115.0
+uvicorn==0.30.6
+jinja2==3.1.6
+databricks-sdk==0.33.0
+openpyxl==3.1.5
+python-multipart==0.0.30

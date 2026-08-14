@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="188" height="44" viewBox="0 0 188 44" role="img" aria-label="Data Download Hub">
+  <!--
+    Neutral placeholder logo for the Data Download Hub app. Self-contained (no
+    external fonts/images) so the app stays fully offline/air-gap capable. Swap
+    by pointing the APP_LOGO env var at your own /static/img asset.
+  -->
+  <rect x="1" y="1" width="42" height="42" rx="9" fill="#0b2265"/>
+  <!-- download glyph: arrow into a tray -->
+  <path d="M22 11 v13 M16.5 19 l5.5 5.5 l5.5 -5.5" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14 30 h16" fill="none" stroke="#b8860b" stroke-width="2.6" stroke-linecap="round"/>
+  <text x="54" y="20" font-family="'Public Sans','Helvetica Neue',Arial,sans-serif" font-size="15" font-weight="700" fill="#0b2265">Data Download</text>
+  <text x="54" y="36" font-family="'Public Sans','Helvetica Neue',Arial,sans-serif" font-size="15" font-weight="700" fill="#1a4480">Hub</text>
+</svg>

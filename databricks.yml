@@ -1,0 +1,42 @@
+# Databricks Asset Bundle — Data Download Hub (a configurable gold-view download
+# app with per-report filters). Set the variables + workspace.host below to your
+# environment (or override per target / via -p <profile>) before deploying.
+bundle:
+  name: download_hub
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog holding the report_config registry + report/audit tables
+    default: main
+  schema:
+    description: Schema holding the report_config registry + report/audit tables
+    default: default
+  warehouse_id:
+    description: Serverless SQL warehouse the app queries through (set to your id)
+    default: ""
+  app_users_group:
+    description: Databricks group for basic app access
+    default: download_hub_app_users
+  download_users_group:
+    description: Databricks group for the gated download entitlement
+    default: download_hub_download_users
+
+workspace:
+  # Replace with your workspace URL (or set per target / via the CLI profile).
+  host: https://YOUR-WORKSPACE.cloud.databricks.com
+
+targets:
+  dev:
+    default: true
+    mode: development
+  staging:
+    mode: development
+  prod:
+    mode: production
+
+# resources:  (added incrementally by phases)
+#   Phase 1 → schema + tables + synthetic-data job
+#   Phase 2 → apps.download-hub (FastAPI) + sql-warehouse resource binding

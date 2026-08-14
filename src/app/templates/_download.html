@@ -1,0 +1,77 @@
+{#
+  _download.html — the generic download acknowledgement modal (LOCKED L7).
+
+  Included by report.html for ANY report when can_download is true. POST /download
+  re-checks the report's effective download group + the kill switch server-side.
+  The hidden report_id/date/search + one hidden input per report.filters mirror
+  the live controls (kept in sync by app.js) so the export matches the on-screen
+  view. Form field name `date` is consistent across the hidden input, app.js, and
+  the route form read.
+#}
+<div class="usa-modal usa-modal--lg" id="download-modal"
+     aria-labelledby="download-modal-heading"
+     aria-describedby="download-modal-desc" data-force-action="false">
+  <div class="usa-modal__content">
+    <div class="usa-modal__main">
+      <h2 class="usa-modal__heading" id="download-modal-heading">Download this view</h2>
+      <form class="usa-form usa-form--large" id="download-form" method="post" action="/download">
+        <input type="hidden" name="report_id" id="download-report-id" value="{{ report.report_id }}">
+        <input type="hidden" name="date" id="download-date" value="{{ selected_date }}">
+        <input type="hidden" name="search" id="download-search" value="">
+        {% for f in report.filters %}
+        <input type="hidden" name="{{ f.field }}" data-field="{{ f.field }}"
+               id="download-filter-{{ f.field }}" value="{{ selected_filters[f.field] }}">
+        {% endfor %}
+
+        <div class="usa-alert usa-alert--warning usa-alert--slim margin-bottom-2" id="download-modal-desc">
+          <div class="usa-alert__body">
+            <p class="usa-alert__text">{{ disclaimer }}</p>
+          </div>
+        </div>
+
+        <div class="usa-checkbox">
+          <input class="usa-checkbox__input" id="download-ack" type="checkbox"
+                 name="acknowledged" value="true" required>
+          <label class="usa-checkbox__label" for="download-ack">
+            I acknowledge the data-handling notice above.
+          </label>
+        </div>
+
+        <label class="usa-label" for="download-justification">Justification (required)</label>
+        <textarea class="usa-textarea" id="download-justification" name="justification"
+                  required aria-required="true"
+                  placeholder="Business reason for exporting this data"></textarea>
+
+        <fieldset class="usa-fieldset margin-top-2">
+          <legend class="usa-legend">Format</legend>
+          <div class="usa-radio">
+            <input class="usa-radio__input" id="download-format-csv" type="radio"
+                   name="format" value="csv" checked>
+            <label class="usa-radio__label" for="download-format-csv">CSV</label>
+          </div>
+          <div class="usa-radio">
+            <input class="usa-radio__input" id="download-format-xlsx" type="radio"
+                   name="format" value="xlsx">
+            <label class="usa-radio__label" for="download-format-xlsx">Excel</label>
+          </div>
+        </fieldset>
+
+        <ul class="usa-button-group margin-top-3">
+          <li class="usa-button-group__item">
+            <button class="usa-button app-download-btn" type="submit">Download</button>
+          </li>
+          <li class="usa-button-group__item">
+            <button type="button" class="usa-button usa-button--unstyled padding-105 text-center"
+                    data-close-modal>Cancel</button>
+          </li>
+        </ul>
+      </form>
+    </div>
+    <button type="button" class="usa-button usa-modal__close" aria-label="Close this window"
+            data-close-modal>
+      <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#close"></use>
+      </svg>
+    </button>
+  </div>
+</div>

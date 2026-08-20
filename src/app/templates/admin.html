@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+
+{% block title %}Admin{% endblock %}
+
+{% block content %}
+{#
+  Admin console (admin-group only), organized into tabs:
+    * Report Views  — view_key (= Databricks view group) + title + order.
+    * Reports       — full query + picked display columns + filters, per view.
+    * System Config — the download disclaimer (stored in the app_config table).
+    * Audit Log     — recent downloads + justifications, downloadable as CSV.
+  Writes go to /admin/{view,report,config} (SP writes); the report builder
+  previews a query via /admin/preview. Tab switching + form wiring live in
+  /static/js/admin.js via the data-role/data-tab hooks below.
+#}
+<div class="app-admin" data-dl-suffix="{{ dl_suffix }}">
+  <div class="app-hero">
+    <h1 class="font-heading-xl app-hero__title">Administration</h1>
+    <p class="usa-intro font-body-sm app-hero__sub">
+      Manage views, reports, the download disclaimer, and review the audit log. Changes take effect immediately.
+    </p>
+  </div>
+
+  <nav class="app-admintabs" aria-label="Admin sections">
+    <button type="button" class="app-admintab app-admintab--active" data-tab="views">Report Views</button>
+    <button type="button" class="app-admintab" data-tab="reports">Reports</button>
+    <button type="button" class="app-admintab" data-tab="config">System Config</button>
+    <button type="button" class="app-admintab" data-tab="audit">Audit Log</button>
+  </nav>
+
+  {# =============================================================== Views #}
+  <section class="app-admin__panel" data-panel="views">
+    <h2 class="font-heading-lg">Report views</h2>
+    <p class="font-body-sm text-base measure-5">
+      A <strong>view</strong> is a set of report tabs. Its <strong>key</strong> is the Databricks group that
+      grants access; its <strong>title</strong> shows in the view switcher. The download group is derived as
+      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a report overrides it.
+    </p>
+
+    <div class="app-tablewrap">
+      <table class="usa-table usa-table--striped usa-table--borderless width-full">
+        <thead>
+          <tr><th scope="col">Key (group)</th><th scope="col">Title</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
+        </thead>
+        <tbody>
+          {% for v in views %}
+          <tr>
+            <th scope="row">{{ v.view_key }}</th>
+            <td>{{ v.title }}</td>
+            <td>{{ v.display_order }}</td>
+            <td>{{ "Yes" if v.enabled else "No" }}</td>
+            <td>
+              <button type="button" class="usa-button usa-button--outline usa-button--small"
+                      data-role="view-edit"
+                      data-view-key="{{ v.view_key }}" data-title="{{ v.title }}"
+                      data-order="{{ v.display_order }}" data-enabled="{{ 'true' if v.enabled else 'false' }}">Edit</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5">No views defined yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="font-heading-sm margin-top-3">Add / edit a view</h3>
+    <form class="usa-form" id="view-form" data-role="view-form">
+      <div class="app-formgrid">
+        <div class="app-field">
+          <label class="usa-label" for="view-key">View key (Databricks group)</label>
+          <input class="usa-input" id="view-key" name="view_key" required
+                 pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
+          <span class="usa-hint">Bare identifier — letters/digits/underscore, no leading digit.</span>
+        </div>
+        <div class="app-field">
+          <label class="usa-label" for="view-title">Title (shown in switcher)</label>
+          <input class="usa-input" id="view-title" name="title" required autocomplete="off">
+        </div>
+        <div class="app-field app-field--narrow">
+          <label class="usa-label" for="view-order">Display order</label>
+          <input class="usa-input" id="view-order" name="display_order" type="number" value="1" min="1">
+        </div>
+      </div>
+      <div class="usa-checkbox">
+        <input class="usa-checkbox__input" id="view-enabled" name="enabled" type="checkbox" value="true" checked>
+        <label class="usa-checkbox__label" for="view-enabled">Enabled</label>
+      </div>
+      <div class="app-formactions">
+        <button class="usa-button" type="submit">Save view</button>
+        <button type="button" class="usa-button usa-button--outline" data-role="view-reset">Clear</button>
+        <span class="app-admin__status" data-role="view-status" role="status"></span>
+      </div>
+    </form>
+  </section>
+
+  {# ============================================================= Reports #}
+  <section class="app-admin__panel" data-panel="reports" hidden>
+    <h2 class="font-heading-lg">Reports</h2>
+
+    <div class="app-tablewrap">
+      <table class="usa-table usa-table--striped usa-table--borderless width-full">
+        <thead>
+          <tr><th scope="col">Report</th><th scope="col">View</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
+        </thead>
+        <tbody>
+          {% for r in reports %}
+          <tr>
+            <th scope="row">{{ r.title }} <span class="text-base font-body-3xs">({{ r.report_id }})</span></th>
+            <td>{{ r.view_key }}</td>
+            <td>{{ r.display_order }}</td>
+            <td>{{ "Yes" if r.enabled else "No" }}</td>
+            <td>
+              <button type="button" class="usa-button usa-button--outline usa-button--small"
+                      data-role="report-edit"
+                      data-report-id="{{ r.report_id }}" data-title="{{ r.title }}"
+                      data-source-query="{{ r.source_query }}" data-date-field="{{ r.date_field }}"
+                      data-order-by="{{ r.order_by }}" data-display-order="{{ r.display_order }}"
+                      data-enabled="{{ 'true' if r.enabled else 'false' }}"
+                      data-download-group="{{ r.download_group }}" data-view-key="{{ r.view_key }}"
+                      data-columns-json="{{ r.columns_json }}" data-filters-json="{{ r.filters_json }}">Edit</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5">No reports defined yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="font-heading-sm margin-top-3">Add / edit a report</h3>
+    <form class="usa-form" id="report-form" data-role="report-form">
+      <div class="app-formgrid">
+        <div class="app-field">
+          <label class="usa-label" for="r-report-id">Report ID</label>
+          <input class="usa-input" id="r-report-id" name="report_id" required
+                 pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
+          <span class="usa-hint">Stable key; reusing an ID edits that report.</span>
+        </div>
+        <div class="app-field">
+          <label class="usa-label" for="r-title">Title</label>
+          <input class="usa-input" id="r-title" name="title" required autocomplete="off">
+        </div>
+        <div class="app-field app-field--narrow">
+          <label class="usa-label" for="r-view">View</label>
+          <select class="usa-select" id="r-view" name="view_key" required>
+            <option value="">— choose —</option>
+            {% for v in views %}
+            <option value="{{ v.view_key }}">{{ v.title }} ({{ v.view_key }})</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="app-field">
+        <label class="usa-label" for="r-query">Source query (a single SELECT)</label>
+        <textarea class="usa-textarea" id="r-query" name="source_query" rows="4"
+                  data-role="report-query" spellcheck="false"
+                  placeholder="SELECT * FROM catalog.schema.table"></textarea>
+        <div class="app-formactions">
+          <button type="button" class="usa-button usa-button--outline"
+                  data-role="run-query">Run query &amp; pick columns</button>
+          <span class="app-admin__status" data-role="query-status" role="status"></span>
+        </div>
+      </div>
+
+      {# Column/filter picker — populated by admin.js after "Run query". #}
+      <div class="app-field" data-role="columns-wrap" hidden>
+        <label class="usa-label">Columns &amp; filters</label>
+        <span class="usa-hint">Check the columns to display. Leave all unchecked to show every column the query returns.</span>
+        <div class="app-tablewrap">
+          <table class="usa-table usa-table--compact usa-table--borderless width-full" data-role="columns-table">
+            <thead>
+              <tr><th scope="col">Show</th><th scope="col">Column</th><th scope="col">Label</th><th scope="col">Format</th><th scope="col">Filter</th></tr>
+            </thead>
+            <tbody data-role="columns-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="app-formgrid">
+        <div class="app-field">
+          <label class="usa-label" for="r-date-field">Date field (optional)</label>
+          <select class="usa-select" id="r-date-field" name="date_field" data-role="date-field">
+            <option value="">— none (show all rows) —</option>
+          </select>
+        </div>
+        <div class="app-field">
+          <label class="usa-label" for="r-order-by">Order by (optional)</label>
+          <select class="usa-select" id="r-order-by" name="order_by" data-role="order-by">
+            <option value="">— none —</option>
+          </select>
+        </div>
+        <div class="app-field app-field--narrow">
+          <label class="usa-label" for="r-order">Display order</label>
+          <input class="usa-input" id="r-order" name="display_order" type="number" value="1" min="1">
+        </div>
+      </div>
+      <div class="app-field">
+        <label class="usa-label" for="r-download-group">Download group override (optional)</label>
+        <input class="usa-input" id="r-download-group" name="download_group"
+               data-role="download-group" autocomplete="off"
+               pattern="[A-Za-z_][A-Za-z0-9_]*">
+        <span class="usa-hint" data-role="download-hint">Leave blank to derive from the view key.</span>
+      </div>
+      <div class="usa-checkbox">
+        <input class="usa-checkbox__input" id="r-enabled" name="enabled" type="checkbox" value="true" checked>
+        <label class="usa-checkbox__label" for="r-enabled">Enabled</label>
+      </div>
+
+      <input type="hidden" name="columns_json" data-role="columns-json" value="[]">
+      <input type="hidden" name="filters_json" data-role="filters-json" value="[]">
+
+      <div class="app-formactions">
+        <button class="usa-button" type="submit">Save report</button>
+        <button type="button" class="usa-button usa-button--outline" data-role="report-reset">New / clear</button>
+        <span class="app-admin__status" data-role="report-status" role="status"></span>
+      </div>
+    </form>
+  </section>
+
+  {# ======================================================= System Config #}
+  <section class="app-admin__panel" data-panel="config" hidden>
+    <h2 class="font-heading-lg">System configuration</h2>
+    <p class="font-body-sm text-base measure-5">
+      The <strong>download disclaimer</strong> is shown in the download dialog and embedded at the top of every
+      exported file. It is stored in the <code>app_config</code> table and applies to all reports.
+    </p>
+    <form class="usa-form usa-form--large" id="config-form" data-role="config-form">
+      <div class="app-field">
+        <label class="usa-label" for="cfg-disclaimer">Download disclaimer</label>
+        <textarea class="usa-textarea" id="cfg-disclaimer" name="disclaimer" rows="8">{{ current_disclaimer }}</textarea>
+        <span class="usa-hint">Plain text. Line breaks are preserved in the export.</span>
+      </div>
+      <div class="app-formactions">
+        <button class="usa-button" type="submit">Save configuration</button>
+        <span class="app-admin__status" data-role="config-status" role="status"></span>
+      </div>
+    </form>
+  </section>
+
+  {# ============================================================ Audit Log #}
+  <section class="app-admin__panel" data-panel="audit" hidden>
+    <div class="app-audit__head">
+      <h2 class="font-heading-lg">Audit log</h2>
+      <a class="usa-button app-download-btn" href="/admin/audit.csv">
+        <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+          <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+        </svg>
+        Download CSV
+      </a>
+    </div>
+    <p class="font-body-sm text-base">Most recent {{ audit_rows|length }} download events (newest first). Full history available via the CSV export.</p>
+    <div class="app-tablewrap">
+      <table class="usa-table usa-table--striped usa-table--borderless usa-table--compact width-full">
+        <thead>
+          <tr>{% for c in audit_columns %}<th scope="col">{{ c }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in audit_rows %}
+          <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          {% else %}
+          <tr><td colspan="{{ audit_columns|length }}">No downloads recorded yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block footer_extra %}App version {{ app_version }}.{% endblock %}
+
+{% block scripts_extra %}
+<script src="/static/js/admin.js?v={{ asset_version }}" defer></script>
+{% endblock %}

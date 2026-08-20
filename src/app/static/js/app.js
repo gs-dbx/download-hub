@@ -13,8 +13,33 @@
 (function () {
   "use strict";
 
+  // ---- Copy/paste deterrent (whole page; form fields stay usable) ----------
+  // CSS sets `user-select:none` on the body and re-enables it on form controls;
+  // here we block copy/cut/right-click/drag anywhere OUTSIDE an editable field
+  // (so the admin SQL box, justification, etc. still work). This is a deterrent
+  // only — screenshots and dev-tools cannot be prevented by any web app.
+  function inEditable(t) {
+    return !!(t && t.closest && t.closest('input,textarea,select,[contenteditable="true"]'));
+  }
+  ["copy", "cut", "contextmenu", "dragstart"].forEach(function (ev) {
+    document.addEventListener(
+      ev,
+      function (e) {
+        if (!inEditable(e.target)) e.preventDefault();
+      },
+      { capture: true }
+    );
+  });
+
+  // ---- View switcher: navigate to the selected view's first report ---------
+  var viewSwitcher = document.querySelector('[data-role="view-switcher"]');
+  if (viewSwitcher)
+    viewSwitcher.addEventListener("change", function () {
+      if (viewSwitcher.value) window.location.href = viewSwitcher.value;
+    });
+
   var container = document.querySelector("[data-report-id]");
-  if (!container) return;
+  if (!container) return; // report-specific wiring below only runs on report pages
   var reportId = container.getAttribute("data-report-id");
 
   function byRole(role) {
@@ -28,6 +53,8 @@
   var tbody = byRole("report-tbody");
   var pager = byRole("report-pager");
   var updated = byRole("report-updated");
+  var spinner = byRole("report-spinner");
+  var tableWrap = byRole("report-table-wrap");
   var filterEls = container.querySelectorAll('[data-role="report-filter"]');
 
   // Download panel hidden inputs (present only for download-group members).
@@ -35,6 +62,36 @@
   var dlSearch = document.getElementById("download-search");
 
   var currentPage = 1;
+
+  // Show/hide the loading spinner over the table (guarded — absent is a no-op).
+  // A minimum on-screen time keeps the spinner perceptible even when the fetch
+  // completes almost instantly (in-memory filter/search/paginate).
+  var _spinnerShownAt = 0;
+  var _spinnerHideTimer = null;
+  var MIN_SPINNER_MS = 350;
+  function showSpinner() {
+    if (_spinnerHideTimer) {
+      clearTimeout(_spinnerHideTimer);
+      _spinnerHideTimer = null;
+    }
+    _spinnerShownAt = Date.now();
+    if (spinner) {
+      spinner.hidden = false;
+      spinner.setAttribute("aria-hidden", "false");
+    }
+    if (tableWrap) tableWrap.setAttribute("aria-busy", "true");
+  }
+  function hideSpinner() {
+    var elapsed = Date.now() - _spinnerShownAt;
+    var wait = Math.max(0, MIN_SPINNER_MS - elapsed);
+    _spinnerHideTimer = setTimeout(function () {
+      if (spinner) {
+        spinner.hidden = true;
+        spinner.setAttribute("aria-hidden", "true");
+      }
+      if (tableWrap) tableWrap.setAttribute("aria-busy", "false");
+    }, wait);
+  }
 
   // Keep the download panel's hidden fields synced to the live controls so the
   // export matches what is on screen (LOCKED DECISION L7). Guarded: the panel is
@@ -115,16 +172,27 @@
       encodeURIComponent(reportId) +
       "/table?" +
       buildQuery(extra);
-    var resp = await fetch(url, { headers: { Accept: "text/html" } });
-    tbody.innerHTML = await resp.text(); // swap the server-rendered fragment
-    var totalRows = parseInt(resp.headers.get("X-Total-Rows") || "0", 10);
-    var totalPages = parseInt(resp.headers.get("X-Total-Pages") || "1", 10);
-    var page = parseInt(resp.headers.get("X-Page") || "1", 10);
-    currentPage = page;
-    drawPager(totalRows, totalPages, page);
-    var fetchedAt = resp.headers.get("X-Fetched-At");
-    if (updated && fetchedAt) updated.textContent = "Last updated " + fetchedAt;
-    syncDownloadFields(); // keep the export in sync with the new view
+    showSpinner();
+    try {
+      var resp = await fetch(url, { headers: { Accept: "text/html" } });
+      tbody.innerHTML = await resp.text(); // swap the server-rendered fragment
+      var totalRows = parseInt(resp.headers.get("X-Total-Rows") || "0", 10);
+      var totalPages = parseInt(resp.headers.get("X-Total-Pages") || "1", 10);
+      var page = parseInt(resp.headers.get("X-Page") || "1", 10);
+      currentPage = page;
+      drawPager(totalRows, totalPages, page);
+      var fetchedAt = resp.headers.get("X-Fetched-At");
+      if (updated && fetchedAt)
+        updated.textContent = "Last updated " + fetchedAt;
+      syncDownloadFields(); // keep the export in sync with the new view
+    } catch (err) {
+      // Network failure — surface a concise inline message, never a blank table.
+      tbody.innerHTML =
+        '<tr><td colspan="99">Could not reach the server. Check your ' +
+        "connection and try again.</td></tr>";
+    } finally {
+      hideSpinner();
+    }
   }
 
   function resetAndFetch() {
@@ -153,6 +221,115 @@
       currentPage = 1;
       refreshFragment({ refresh: "1" });
     });
+
+  // ---- Download form: intercept submit for a spinner + explicit errors ----
+  // A plain form POST navigates away and shows a raw browser error page on
+  // failure. We POST via fetch instead so we can (a) show the spinner while the
+  // export builds, (b) trigger the file download from the returned blob, and
+  // (c) render the server's specific error message in the modal rather than a
+  // full-page error. All same-origin, no external asset (air-gap safe).
+  var dlForm = document.getElementById("download-form");
+  var dlSubmit = byRole("download-submit");
+  var dlError = byRole("download-error");
+  var dlErrorText = byRole("download-error-text");
+
+  function showDownloadError(msg) {
+    if (dlErrorText) dlErrorText.textContent = msg;
+    if (dlError) dlError.hidden = false;
+  }
+  function clearDownloadError() {
+    if (dlError) dlError.hidden = true;
+    if (dlErrorText) dlErrorText.textContent = "";
+  }
+
+  // Pull the filename the server set in Content-Disposition (fallback given).
+  function filenameFromDisposition(header, fallback) {
+    if (!header) return fallback;
+    var m = /filename="?([^"]+)"?/.exec(header);
+    return m ? m[1] : fallback;
+  }
+
+  function triggerBlobDownload(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoke on the next tick so the download has started.
+    setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
+  // Parse an error body: FastAPI HTTPException -> {"detail": "..."}.
+  async function errorMessageFromResponse(resp) {
+    try {
+      var data = await resp.clone().json();
+      if (data && data.detail) return String(data.detail);
+    } catch (e) {
+      /* not JSON — fall through */
+    }
+    try {
+      var text = await resp.text();
+      if (text) return text;
+    } catch (e) {
+      /* ignore */
+    }
+    return "The download could not be completed (HTTP " + resp.status + ").";
+  }
+
+  if (dlForm) {
+    dlForm.addEventListener("submit", async function (evt) {
+      evt.preventDefault();
+      clearDownloadError();
+      syncDownloadFields(); // ensure hidden fields match the live view
+      // Loading state ON THE BUTTON — the modal overlay hides the table spinner,
+      // so feedback must live inside the modal.
+      var _origBtnHTML = dlSubmit ? dlSubmit.innerHTML : "";
+      if (dlSubmit) {
+        dlSubmit.disabled = true;
+        dlSubmit.setAttribute("aria-disabled", "true");
+        dlSubmit.innerHTML =
+          '<span class="app-btn-spinner" aria-hidden="true"></span> Preparing download…';
+      }
+      showSpinner();
+      try {
+        var resp = await fetch(dlForm.action, {
+          method: "POST",
+          body: new FormData(dlForm),
+        });
+        if (!resp.ok) {
+          showDownloadError(await errorMessageFromResponse(resp));
+          return;
+        }
+        var blob = await resp.blob();
+        var filename = filenameFromDisposition(
+          resp.headers.get("Content-Disposition"),
+          reportId + "_export"
+        );
+        triggerBlobDownload(blob, filename);
+        // Success — close the modal (click any close control).
+        var closer = document.querySelector(
+          "#download-modal [data-close-modal]"
+        );
+        if (closer) closer.click();
+      } catch (err) {
+        showDownloadError(
+          "Could not reach the server to build the download. Check your " +
+            "connection and try again."
+        );
+      } finally {
+        hideSpinner();
+        if (dlSubmit) {
+          dlSubmit.disabled = false;
+          dlSubmit.removeAttribute("aria-disabled");
+          dlSubmit.innerHTML = _origBtnHTML;
+        }
+      }
+    });
+  }
 
   // Initialize the pager from the server-rendered page-1 data attributes.
   if (pager) {

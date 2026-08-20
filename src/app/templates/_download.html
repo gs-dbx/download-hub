@@ -29,6 +29,14 @@
           </div>
         </div>
 
+        {# Populated + shown by app.js when POST /download returns an error. #}
+        <div class="usa-alert usa-alert--error usa-alert--slim margin-bottom-2"
+             id="download-error" data-role="download-error" role="alert" hidden>
+          <div class="usa-alert__body">
+            <p class="usa-alert__text" data-role="download-error-text"></p>
+          </div>
+        </div>
+
         <div class="usa-checkbox">
           <input class="usa-checkbox__input" id="download-ack" type="checkbox"
                  name="acknowledged" value="true" required>
@@ -58,7 +66,8 @@
 
         <ul class="usa-button-group margin-top-3">
           <li class="usa-button-group__item">
-            <button class="usa-button app-download-btn" type="submit">Download</button>
+            <button class="usa-button app-download-btn" type="submit"
+                    data-role="download-submit">Download</button>
           </li>
           <li class="usa-button-group__item">
             <button type="button" class="usa-button usa-button--unstyled padding-105 text-center"

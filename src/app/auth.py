@@ -19,29 +19,111 @@ if TYPE_CHECKING:  # typing only — auth never runtime-imports reports (no cycl
 USER_TOKEN_HEADER: str = "x-forwarded-access-token"
 USER_EMAIL_HEADER: str = "x-forwarded-user"
 
-# Generic default Databricks group whose members may use the gated download
-# feature when a report does not name its own group. Per-report control lives in
-# the report_config ``download_group`` column (see effective_download_group);
-# this constant is only the fallback. Membership is re-checked server-side on
-# POST /download.
+# Generic default Databricks group used as the ultimate fallback for a report's
+# view group when it has neither a ``view_key`` nor an explicit
+# ``download_group``. In normal operation every report names a ``view_key``, so
+# this is only a defensive fallback. Membership is re-checked server-side.
 DOWNLOAD_GROUP: str = "download_hub_download_users"
 
+# Default suffix appended to a report's ``view_key`` to derive its download
+# group when no explicit ``download_group`` is set (e.g. view_key ``efile_ops``
+# -> download group ``efile_ops_dl``). Overridable via the ``DOWNLOAD_GROUP_SUFFIX``
+# env var, read in ``main.py`` and passed through.
+DEFAULT_DOWNLOAD_SUFFIX: str = "_dl"
 
-def effective_download_group(report: "ReportConfig") -> str:
-    """Return the per-report download group when set, else the code default.
+# Default admin group whose members may use the report/view admin console. The
+# name is overridable via the ``ADMIN_GROUP`` env var (read in ``main.py``).
+ADMIN_GROUP: str = "download_hub_admin_users"
 
-    Treats ``None`` / whitespace-only ``download_group`` as unset and falls back
-    to :data:`DOWNLOAD_GROUP`. Used by BOTH the button-visibility gate and the
-    server-side ``POST /download`` enforcement.
+
+def effective_view_group(report: "ReportConfig") -> str:
+    """Return the Databricks group that grants VIEW access to a report.
+
+    The view group is the report's ``view_key`` (the key doubles as the group).
+    Falls back to :data:`DOWNLOAD_GROUP` only when ``view_key`` is unset (which
+    should not happen for a well-formed report).
 
     Args:
-        report: The active report config (only its ``download_group`` is read).
+        report: The report config (only its ``view_key`` is read).
 
     Returns:
-        The report's ``download_group`` (stripped) if non-empty, else
+        The report's ``view_key`` (stripped) if non-empty, else
         :data:`DOWNLOAD_GROUP`.
     """
-    return (getattr(report, "download_group", None) or "").strip() or DOWNLOAD_GROUP
+    return (getattr(report, "view_key", None) or "").strip() or DOWNLOAD_GROUP
+
+
+def derive_download_group(view_key: str, suffix: str = DEFAULT_DOWNLOAD_SUFFIX) -> str:
+    """Return the download group derived from a view key by naming convention.
+
+    Args:
+        view_key: The report's view key / view group (a bare identifier).
+        suffix: The suffix to append (e.g. ``"_dl"``).
+
+    Returns:
+        ``f"{view_key}{suffix}"``.
+    """
+    return f"{view_key}{suffix}"
+
+
+def effective_download_group(
+    report: "ReportConfig", suffix: str = DEFAULT_DOWNLOAD_SUFFIX
+) -> str:
+    """Return the group whose members may DOWNLOAD a report.
+
+    Uses the explicit ``download_group`` when set (stripped, non-empty); else
+    derives it from the report's view group + ``suffix`` (LOCKED naming
+    convention). Used by BOTH the button-visibility gate and the server-side
+    ``POST /download`` enforcement.
+
+    Args:
+        report: The active report config.
+        suffix: The download-group suffix (env-configurable).
+
+    Returns:
+        The effective download group name.
+    """
+    explicit = (getattr(report, "download_group", None) or "").strip()
+    if explicit:
+        return explicit
+    return derive_download_group(effective_view_group(report), suffix)
+
+
+def can_view(
+    me_user: Any, report: "ReportConfig", suffix: str = DEFAULT_DOWNLOAD_SUFFIX
+) -> bool:
+    """Return whether the user may SEE a report's tab.
+
+    A user sees a report if they belong to its view group OR its download group
+    (so download-group members always see what they can export).
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        report: The report config.
+        suffix: The download-group suffix (env-configurable).
+
+    Returns:
+        ``True`` if the user is a member of the report's view group or download
+        group; ``False`` otherwise.
+    """
+    names = group_display_names(me_user)
+    return (
+        effective_view_group(report) in names
+        or effective_download_group(report, suffix) in names
+    )
+
+
+def is_admin(me_user: Any, admin_group: str = ADMIN_GROUP) -> bool:
+    """Return whether the user belongs to the report/view admin group.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        admin_group: The admin group display name (env-configurable).
+
+    Returns:
+        ``True`` if the user is a member of ``admin_group``.
+    """
+    return is_member(me_user, admin_group)
 
 
 def _get_case_insensitive(headers: Any, key: str) -> str | None:

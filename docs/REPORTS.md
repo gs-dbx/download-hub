@@ -6,7 +6,7 @@ The app is a **config-driven multi-report portal**. Every tab, its columns, its 
 
 - The app reads `report_config` **as the app service principal** (not as the user) and TTL-caches the parsed rows in-process for ~300 seconds. A newly MERGE'd or edited row therefore appears within ~5 minutes without a redeploy (restart the app to pick it up immediately).
 - Only rows with `enabled = true` are shown; they are ordered by `display_order`.
-- The report's **data** is still read **as the signed-in user (OBO)** — Unity Catalog enforces the user's own SELECT on `source_fqn`. The registry read and the data read are separate identities.
+- The report's **data** is still read **as the signed-in user (OBO)** — Unity Catalog enforces the user's own SELECT on whatever the `source_query` reads. The registry read and the data read are separate identities.
 
 ## Row shape
 
@@ -14,9 +14,9 @@ The app is a **config-driven multi-report portal**. Every tab, its columns, its 
 | --- | --- | --- |
 | `report_id` | STRING | Stable registry key (a bare identifier, e.g. `daily_metrics`). The MERGE key. |
 | `title` | STRING | Human-facing tab/report title. Recorded in the audit row. |
-| `source_fqn` | STRING | The Unity Catalog table to read (1–3 dotted parts; each part a bare identifier). |
-| `date_field` | STRING | The date/timestamp column the report is scoped by (drives the date selector). |
-| `columns_json` | STRING | JSON array of display columns (see below). |
+| `source_query` | STRING | The full `SELECT` the report reads (a single statement; wrapped as a subquery `FROM ( … ) AS _q`). |
+| `date_field` | STRING | Optional date/timestamp column to scope by (drives the date selector). `NULL`/empty → no date selector; all rows show. |
+| `columns_json` | STRING | JSON array of display columns (see below). Empty/`NULL` → show every column the query returns. |
 | `filters_json` | STRING | JSON array of filter dropdowns (may be empty/omitted). |
 | `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab). |
@@ -53,10 +53,11 @@ A JSON array of `{"field", "label"}` objects:
 Each filter renders a dropdown whose options are the distinct values of `field`
 in the current date's snapshot; it defaults to the first distinct value.
 
-> **The filter `field` must be projectable.** The per-user snapshot selects
-> `display columns ∪ filter fields`, so a filter field that is not a real column
-> on `source_fqn` will break the read. Filter fields do not need to appear in
-> `columns_json`, but they must exist on the source table.
+> **The filter `field` must be a column the query returns.** When `columns_json`
+> is set, the per-user snapshot selects `display columns ∪ filter fields`, so a
+> filter field that is not returned by `source_query` will break the read. When
+> `columns_json` is empty the snapshot selects `*`, so any returned column is
+> filterable. Filter fields do not need to appear in `columns_json`.
 
 ## Adding or updating a report
 
@@ -84,8 +85,10 @@ Download is generic: any report gets a group-gated download that exports the **c
 
 - **VALUES** (the selected date and filter selections) are ALWAYS bound as
   `:named` Statement Execution parameters — never interpolated into SQL.
-- **IDENTIFIERS** (column names, filter fields, `order_by`, each dotted part of
-  `source_fqn`) come from admin-authored config and cannot be bound, so each is
-  validated against a strict allowlist (`^[A-Za-z_][A-Za-z0-9_]*$`) at
-  query-build time; a bad identifier raises `ValueError` rather than reaching the
-  warehouse.
+- **IDENTIFIERS** (column names, filter fields, `order_by`) come from
+  admin-authored config and cannot be bound, so each is validated against a
+  strict allowlist (`^[A-Za-z_][A-Za-z0-9_]*$`) at query-build time; a bad
+  identifier raises `ValueError` rather than reaching the warehouse.
+- The **`source_query`** is admin-authored SQL, validated to be a single
+  statement (no embedded `;`) and wrapped as a subquery. Treat write access to
+  `report_config` as trusted.

@@ -113,13 +113,205 @@ body {
 .app-pct--neg { color: var(--app-neg); font-weight: 600; }
 .app-pct--muted { color: var(--app-muted); }
 
+/* ---- Loading spinner overlay (table reloads + downloads) ---- */
+.app-table-wrap {
+  position: relative;
+}
+
+/* Wide tables scroll inside the wrapper rather than stretching the page. */
+.app-table-wrap { overflow-x: auto; }
+
+/* Dim + block the table while loading; the overlay sits above it. */
+.app-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 3rem;
+  background-color: rgba(255, 255, 255, 0.6);
+  z-index: 5;
+}
+.app-spinner[hidden] {
+  display: none;
+}
+
+/* Pure-CSS ring spinner — no external asset (air-gap safe). */
+.app-spinner__dot {
+  display: inline-block;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 4px solid var(--app-border);
+  border-top-color: var(--app-navy);
+  border-radius: 50%;
+  animation: app-spin 0.8s linear infinite;
+}
+
+@keyframes app-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Small inline spinner for a button's loading state (white on the navy btn). */
+.app-btn-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: app-spin 0.7s linear infinite;
+  vertical-align: -0.15em;
+  margin-right: 0.4rem;
+}
+
+/* Respect reduced-motion: fall back to a static, non-animated indicator. */
+@media (prefers-reduced-motion: reduce) {
+  .app-spinner__dot,
+  .app-btn-spinner { animation: none; }
+}
+
+/* Disabled Download button while an export is in flight. */
+.app-download-btn[disabled],
+.app-download-btn[aria-disabled="true"] {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+/* ---- Copy/paste deterrent: no text selection except in form controls ---- */
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
+/* ---- Tab row: tabs (left) + view switcher & admin (top-right), one border --- */
+.app-tabrow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin-top: 1rem;
+  border-bottom: 2px solid var(--app-border);
+}
+.app-tabrow__right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-bottom: 0.45rem;   /* sit above the shared underline */
+}
+.app-viewlabel {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--app-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+/* Compact switcher that fits the tab row height. */
+.app-viewselect {
+  margin: 0;
+  width: auto;
+  min-width: 11rem;
+  height: 2.1rem;
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+  background-color: #fff;
+}
+.app-admin-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--app-blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+.app-admin-link:hover { color: var(--app-navy); text-decoration: underline; }
+.app-admin-link .usa-icon { width: 1.1rem; height: 1.1rem; fill: currentColor; }
+
+/* ---- Admin console ---- */
+.app-admin__status { margin: 0; font-size: 0.9rem; color: var(--app-muted); align-self: center; }
+.app-admin__status--ok { color: var(--app-pos); }
+.app-admin__status--err { color: var(--app-neg); }
+.usa-table--compact th,
+.usa-table--compact td { padding: 0.35rem 0.5rem; font-size: 0.9rem; }
+.measure-5 { max-width: 44rem; }
+
+/* Horizontal scroll container so wide tables never break the page layout. */
+.app-tablewrap { overflow-x: auto; margin: 0.5rem 0 0; }
+
+/* Admin sub-tabs. */
+.app-admintabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 2px solid var(--app-border);
+  margin: 0.5rem 0 1.5rem;
+}
+.app-admintab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  color: var(--app-blue);
+  cursor: pointer;
+  font-size: 1rem;
+}
+.app-admintab:hover { color: var(--app-navy); background-color: #eef2f8; }
+.app-admintab--active { color: var(--app-navy); border-bottom-color: var(--app-accent); }
+.app-admin__panel { margin-bottom: 2rem; }
+
+/* Admin form layout: responsive grid of fields + a right-aligned action row. */
+.app-formgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+.app-formgrid .app-field { margin: 0; }
+.app-field--narrow { max-width: 12rem; }
+.app-admin .app-field { margin-bottom: 0.75rem; }
+/* USWDS caps .usa-form at 20rem; lift it so admin forms use the full width. */
+.app-admin .usa-form,
+.app-admin .usa-form--large { max-width: none; width: 100%; }
+.app-admin .usa-textarea,
+.app-admin .usa-input,
+.app-admin .usa-select { max-width: 100%; }
+/* Keep single free-text fields readable rather than stretched edge-to-edge. */
+.app-admin .app-field--wide { max-width: 60rem; }
+.app-formactions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.app-audit__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 /* ---- Report tab nav ---- */
 .app-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1.25rem;
-  border-bottom: 2px solid var(--app-border);
-  margin-top: 1rem;
   padding-bottom: 0;
 }
 
@@ -155,19 +347,13 @@ body {
   margin-left: 0.75rem;
 }
 
-/* Generic filter/size/refresh fields share the search field's flex behavior. */
-.app-field--filter { flex: 0 0 8rem; }
-.app-field--size   { flex: 0 0 6rem; }
-.app-field--refresh { flex: 0 0 auto; justify-content: flex-end; }
-.app-field--refresh .usa-button { margin-top: 0.25rem; }
-
-/* ---- Control bar: filters left, Download action right, one aligned row ---- */
+/* ---- Control bar: filters flow left-to-right, Download aligned right ---- */
 .app-toolbar {
   display: flex;
   align-items: flex-end;      /* bottom-align the button with the inputs */
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 1rem 1.5rem;
+  gap: 0.75rem 1.5rem;
   margin: 0 0 1.25rem 0;
 }
 
@@ -175,7 +361,7 @@ body {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.75rem 1rem;
   flex: 1 1 auto;
   margin: 0;                  /* override usa-form spacing */
   max-width: none;
@@ -186,15 +372,21 @@ body {
   flex-direction: column;
 }
 /* USWDS labels add top margin; zero it so fields bottom-align cleanly. */
-.app-field .usa-label { margin-top: 0; }
+.app-field .usa-label { margin-top: 0; font-size: 0.93rem; }
 .app-field .usa-input,
 .app-field .usa-select { margin-top: 0.25rem; width: 100%; max-width: 100%; }
 
-.app-field--search { flex: 1 1 18rem; }
-.app-field--date   { flex: 0 0 15rem; }   /* room for "2026-01-12 00:00:00" */
+/* Explicit per-field widths so the row lays out horizontally and wraps cleanly. */
+.app-field--search { flex: 1 1 14rem; max-width: 22rem; }
+.app-field--date   { flex: 0 0 13rem; }   /* room for "2026-01-12 00:00:00" */
+.app-field--filter { flex: 0 0 10rem; }
+.app-field--size   { flex: 0 0 6.5rem; }
+.app-field--refresh { flex: 0 0 auto; align-self: flex-end; }
+.app-field--refresh .usa-button { margin-top: 0.25rem; white-space: nowrap; }
 
 .app-toolbar__actions {
   flex: 0 0 auto;
+  align-self: flex-end;
   padding-bottom: 0.1rem;
 }
 

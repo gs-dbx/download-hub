@@ -25,8 +25,8 @@ _KWARGS = dict(
 
 
 def test_build_audit_row_has_all_logical_fields():
-    """The row carries all 13 logical fields (event_ts is added by the SQL)."""
-    row = build_audit_row(**_KWARGS)
+    """The row carries all logical fields (event_ts is added by the SQL)."""
+    row = build_audit_row(**_KWARGS, source_query="SELECT * FROM t")
     expected = {
         "audit_id",
         "user_email",
@@ -40,12 +40,19 @@ def test_build_audit_row_has_all_logical_fields():
         "app_version",
         "report_id",
         "report_title",
+        "source_query",
     }
     assert set(row) == expected
     assert row["acknowledged"] is True
     assert row["row_count"] == 17
     assert row["report_id"] == "daily_metrics"
     assert row["report_title"] == "Daily Metrics Overview"
+    assert row["source_query"] == "SELECT * FROM t"
+
+
+def test_build_audit_row_source_query_defaults_empty():
+    """source_query defaults to '' when not supplied (back-compat)."""
+    assert build_audit_row(**_KWARGS)["source_query"] == ""
 
 
 def test_filters_summary_sorts_joins_and_drops_empty():
@@ -99,10 +106,11 @@ def test_build_audit_insert_fqn_and_placeholders():
         "app_version",
         "report_id",
         "report_title",
+        "source_query",
     ):
         assert f":{name}" in sql
-    # 12 bound params (event_ts uses current_timestamp()).
-    assert len(params) == 12
+    # 13 bound params (event_ts uses current_timestamp()).
+    assert len(params) == 13
     assert {p["name"] for p in params} == {
         "audit_id",
         "user_email",
@@ -116,6 +124,7 @@ def test_build_audit_insert_fqn_and_placeholders():
         "app_version",
         "report_id",
         "report_title",
+        "source_query",
     }
 
 
@@ -129,7 +138,18 @@ def test_build_audit_insert_all_values_are_strings():
     assert by_name["row_count"]["type"] == "BIGINT"
     assert by_name["acknowledged"]["value"] == "true"
     assert by_name["acknowledged"]["type"] == "BOOLEAN"
-    assert by_name["report_date"]["type"] == "TIMESTAMP"
+    # report_date is bound as STRING and cast (CAST(NULLIF(...) AS TIMESTAMP)) so
+    # the "All dates" export (empty date) stores NULL rather than failing.
+    assert by_name["report_date"]["type"] == "STRING"
+
+
+def test_build_audit_insert_empty_report_date_casts_to_null():
+    """An empty report_date (All dates) is wrapped so it stores NULL, not ''."""
+    row = build_audit_row(**{**_KWARGS, "report_date": ""})
+    sql, params = build_audit_insert("main", "default", row)
+    assert "CAST(NULLIF(:report_date, '') AS TIMESTAMP)" in sql
+    rd = next(p for p in params if p["name"] == "report_date")
+    assert rd["value"] == "" and rd["type"] == "STRING"
 
 
 def test_build_audit_insert_acknowledged_false():

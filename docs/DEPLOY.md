@@ -47,13 +47,13 @@ This syncs `src/app/` to the workspace and creates/updates the `download-hub` ap
 
 ## 3. Create the data tables and seed sample data
 
-The `metrics_seed` job creates the `report_config` and `download_audit` tables and populates `daily_metrics` with sample data:
+The `metrics_seed` job creates the registry + support tables — `report_config`, `report_view`, `app_config`, and `download_audit` — and populates `daily_metrics` with sample data:
 
 ```bash
 databricks bundle run metrics_seed --target dev
 ```
 
-This runs the seed notebook once. The notebook is idempotent (uses `CREATE TABLE IF NOT EXISTS` and table overwrites), so rerunning is safe.
+This runs the seed notebook once. The notebook is idempotent (`CREATE TABLE IF NOT EXISTS`, table overwrites, and column-add migrations), so rerunning is safe. Its migrations also upgrade older installs in place — adding `report_config.view_key`/`updated_by`, `download_audit.source_query`, and `download_audit.filter_summary` (backfilled from the legacy `drain_filter`).
 
 ## 4. Start / restart the app
 
@@ -64,12 +64,13 @@ databricks apps get download-hub   # expect ACTIVE / SUCCEEDED
 
 **First start note:** the first start (and any start after a `requirements.txt` change) rebuilds the Python virtualenv from `src/app/requirements.txt` inside the Apps runtime; this can take several minutes before the app reports ACTIVE. Subsequent restarts with unchanged requirements are fast.
 
-## 5. Create the two groups
+## 5. Create the groups
 
-Two Databricks groups gate the app. Create them via the UI or API:
+Access is group-based, with three roles (see [PERMISSIONS.md](PERMISSIONS.md)):
 
-- `download_hub_app_users` — basic app access (can view reports as their own user via OBO)
-- `download_hub_download_users` — the gated download entitlement (can export data)
+- **View group — one per view.** A view's `view_key` (in `report_view`) *is* a Databricks group; members see that view's report tabs. Create one group per view you define (e.g. `efile_ops`, `efile_exec`).
+- **Download group.** `<view_key>` + `DOWNLOAD_GROUP_SUFFIX` (default `_dl`), e.g. `efile_ops_dl` — or an explicit `report_config.download_group`. Members can export that view's reports. (A member of the view group only can view but not download.)
+- **Admin group.** `ADMIN_GROUP` (default `download_hub_admin_users`) — members can use the `/admin` console to manage views, reports, the disclaimer, and the audit log.
 
 Add members via the Databricks UI (Groups → Members) or SCIM API:
 
@@ -111,6 +112,19 @@ Or run them all at once (if your warehouse supports it):
 cat resources/grants.sql | databricks sql --warehouse-id <YOUR-WAREHOUSE-ID>
 ```
 
+### App service-principal grants for the admin console
+
+The `/admin` console writes as the app service principal, so the SP needs write access to the registry tables plus read access to the audit table (replace `<APP-SP-CLIENT-ID>`):
+
+```sql
+GRANT MODIFY ON TABLE <catalog>.<schema>.report_config TO `<APP-SP-CLIENT-ID>`;
+GRANT MODIFY ON TABLE <catalog>.<schema>.report_view   TO `<APP-SP-CLIENT-ID>`;
+GRANT MODIFY ON TABLE <catalog>.<schema>.app_config     TO `<APP-SP-CLIENT-ID>`;
+GRANT SELECT ON TABLE <catalog>.<schema>.download_audit TO `<APP-SP-CLIENT-ID>`;  -- audit log tab/export
+```
+
+(The SP already reads `report_config`/`report_view`/`app_config` and inserts into `download_audit` as part of normal operation; `MODIFY` additionally lets admins create/edit rows, and `SELECT` on `download_audit` powers the Audit Log tab.)
+
 > **Known follow-up (account-level federation):** The three `download_hub_app_users` SELECT grants require the group to be resolvable in Unity Catalog. Under account-level identity federation, a group that exists only as a workspace-level SCIM group may not resolve. If a grant fails with `PRINCIPAL_DOES_NOT_EXIST`, see [PERMISSIONS.md](PERMISSIONS.md) — federate the group at the account level first, then re-run the three app-users GRANTs. The app service principal grants (audit write) are unaffected.
 
 ## 7. Configure & rebrand (optional)
@@ -127,7 +141,17 @@ env:
     value: "/static/img/logo.svg"
   - name: DOWNLOADS_ENABLED
     value: "true"   # false/0/no/off disables downloads
+  - name: ADMIN_GROUP
+    value: "download_hub_admin_users"   # members can use /admin
+  - name: DOWNLOAD_GROUP_SUFFIX
+    value: "_dl"                        # download group = <view_key> + suffix
+  - name: MAX_DOWNLOAD_ROWS
+    value: "100000"                     # CSV export cap; over it → HTTP 413
+  - name: MAX_XLSX_ROWS
+    value: "25000"                      # Excel export cap (openpyxl is heavier)
 ```
+
+> The download disclaimer is normally edited in the admin **System Config** tab (stored in `app_config`); `DOWNLOAD_DISCLAIMER` in `app.yaml` remains a fallback when the table has no value.
 
 Then redeploy and restart:
 

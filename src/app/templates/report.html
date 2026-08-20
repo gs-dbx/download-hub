@@ -25,19 +25,23 @@
         <input class="usa-input" id="report-search" type="search"
                data-role="report-search" placeholder="Filter results" autocomplete="off">
       </div>
+      {% if report.date_field %}
       <div class="app-field app-field--date">
         <label class="usa-label" for="report-date">Report date</label>
         <select class="usa-select" id="report-date" data-role="report-date">
+          <option value=""{% if not selected_date %} selected{% endif %}>All dates</option>
           {% for rd in dates %}
           <option value="{{ rd }}"{% if rd == selected_date %} selected{% endif %}>{{ rd }}</option>
           {% endfor %}
         </select>
       </div>
+      {% endif %}
       {% for f in report.filters %}
       <div class="app-field app-field--filter">
         <label class="usa-label" for="report-filter-{{ f.field }}">{{ f.label }}</label>
         <select class="usa-select" id="report-filter-{{ f.field }}"
                 data-role="report-filter" data-field="{{ f.field }}">
+          <option value=""{% if not selected_filters[f.field] %} selected{% endif %}>All</option>
           {% for opt in filter_options[f.field] %}
           <option value="{{ opt }}"{% if opt == selected_filters[f.field] %} selected{% endif %}>{{ opt }}</option>
           {% endfor %}
@@ -72,27 +76,42 @@
     {% endif %}
   </div>
 
-  <table class="usa-table usa-table--striped usa-table--borderless width-full"
-         data-role="report-table">
-    <caption class="usa-sr-only">{{ report.title }} for {{ selected_date }}</caption>
-    <thead>
-      <tr>
-        {% for h in columns %}
-        <th scope="col" class="{{ h.align }}">{{ h.label }}</th>
-        {% endfor %}
-      </tr>
-    </thead>
-    <tbody id="report-tbody" data-role="report-tbody">
-      {% include "_rows.html" %}
-    </tbody>
-  </table>
+  {#
+    The table sits in a positioned wrapper so app.js can overlay a loading
+    spinner (data-role="report-spinner") during fragment reloads and downloads.
+    aria-busy is toggled by app.js for assistive tech.
+  #}
+  <div class="app-table-wrap" data-role="report-table-wrap">
+    <div class="app-spinner" data-role="report-spinner" hidden aria-hidden="true">
+      <span class="app-spinner__dot" role="status" aria-label="Loading"></span>
+    </div>
+    <table class="usa-table usa-table--striped usa-table--borderless width-full"
+           data-role="report-table">
+      <caption class="usa-sr-only">{{ report.title }}{% if selected_date %} for {{ selected_date }}{% endif %}</caption>
+      <thead>
+        <tr>
+          {% for h in columns %}
+          <th scope="col" class="{{ h.align }}">{{ h.label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody id="report-tbody" data-role="report-tbody">
+        {% include "_rows.html" %}
+      </tbody>
+    </table>
+  </div>
 
-  {% if no_access or not rows %}
+  {% if notice %}
+  <div class="usa-alert usa-alert--warning usa-alert--slim margin-top-2" data-role="report-notice" role="alert">
+    <div class="usa-alert__body">
+      <p class="usa-alert__text">{{ notice }}</p>
+    </div>
+  </div>
+  {% elif not rows %}
   <div class="usa-alert usa-alert--info usa-alert--slim margin-top-2" data-role="report-empty">
     <div class="usa-alert__body">
       <p class="usa-alert__text">
-        No data to display &mdash; you may not have access to this report, or no
-        rows match the current filters.
+        No rows match the current filters.
       </p>
     </div>
   </div>

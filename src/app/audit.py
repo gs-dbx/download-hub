@@ -30,6 +30,7 @@ def build_audit_row(
     app_version: str,
     report_id: str,
     report_title: str,
+    source_query: str = "",
     acknowledged: bool = True,
     audit_id: str | None = None,
 ) -> dict:
@@ -47,6 +48,8 @@ def build_audit_row(
         app_version: The running app version string.
         report_id: The report registry key (e.g. ``daily_metrics``).
         report_title: The report's human-facing title.
+        source_query: The report's configured ``source_query`` (the SQL that
+            defined the exported data set). Recorded for audit transparency.
         acknowledged: Whether the data-handling notice was acknowledged
             (always ``True`` for a valid download).
         audit_id: Optional explicit audit id; defaults to a fresh ``uuid4``.
@@ -68,6 +71,7 @@ def build_audit_row(
         "app_version": app_version,
         "report_id": report_id,
         "report_title": report_title,
+        "source_query": source_query or "",
     }
 
 
@@ -95,19 +99,22 @@ def build_audit_insert(
         raise ValueError("catalog and schema are required and must be non-empty")
 
     fqn = f"{catalog}.{schema}.download_audit"
+    # report_date is bound as STRING and cast so the "All dates" export (empty
+    # date) stores NULL instead of failing to parse '' as a TIMESTAMP.
     sql = (
         f"INSERT INTO {fqn} "
         "(audit_id, event_ts, user_email, report_date, filter_summary, search_filter, "
         "row_count, export_format, justification, acknowledged, app_version, "
-        "report_id, report_title) "
-        "VALUES (:audit_id, current_timestamp(), :user_email, :report_date, "
+        "report_id, report_title, source_query) "
+        "VALUES (:audit_id, current_timestamp(), :user_email, "
+        "CAST(NULLIF(:report_date, '') AS TIMESTAMP), "
         ":filter_summary, :search_filter, :row_count, :export_format, :justification, "
-        ":acknowledged, :app_version, :report_id, :report_title)"
+        ":acknowledged, :app_version, :report_id, :report_title, :source_query)"
     )
     params = [
         {"name": "audit_id", "value": row["audit_id"], "type": "STRING"},
         {"name": "user_email", "value": row["user_email"], "type": "STRING"},
-        {"name": "report_date", "value": row["report_date"], "type": "TIMESTAMP"},
+        {"name": "report_date", "value": row["report_date"], "type": "STRING"},
         {"name": "filter_summary", "value": row["filter_summary"], "type": "STRING"},
         {"name": "search_filter", "value": row["search_filter"], "type": "STRING"},
         {"name": "row_count", "value": str(row["row_count"]), "type": "BIGINT"},
@@ -121,5 +128,6 @@ def build_audit_insert(
         {"name": "app_version", "value": row["app_version"], "type": "STRING"},
         {"name": "report_id", "value": row["report_id"], "type": "STRING"},
         {"name": "report_title", "value": row["report_title"], "type": "STRING"},
+        {"name": "source_query", "value": row.get("source_query", ""), "type": "STRING"},
     ]
     return sql, params

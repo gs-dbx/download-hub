@@ -246,8 +246,11 @@ body {
 .app-field--refresh { flex: 0 0 auto; justify-content: flex-end; }
 .app-field--refresh .usa-button { margin-top: 0.25rem; }
 
-/* ---- Control bar: one compact cluster of filters; actions right-aligned on the
-   same row (wrap together below only when there's no room). ---- */
+/* ---- Control bar: every control (search, date, filters, rows, refresh) AND the
+   SQL/Download actions flow in ONE left-packed wrapping row, so there are no
+   mid-row gaps (no growing filter block, no auto-margin pushing actions right).
+   The filters <form> uses display:contents so its fields are promoted into this
+   same flex flow. ---- */
 .app-toolbar {
   display: flex;
   align-items: flex-end;      /* bottom-align the buttons with the inputs */
@@ -257,13 +260,7 @@ body {
 }
 
 .app-toolbar__filters {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
-  flex: 1 1 auto;
-  margin: 0;                  /* override usa-form spacing */
-  max-width: none;
+  display: contents;          /* promote fields into .app-toolbar's flex flow */
 }
 
 .app-field {
@@ -285,15 +282,14 @@ body {
 .app-field--date   { flex: 0 0 14rem; }   /* room for "2026-01-12 00:00:00" */
 .app-field--drain  { flex: 0 0 8rem; }
 
-/* Actions (SQL + Download) cluster on the right of the control row; margin-left
-   auto fills the gap so the space isn't wasted, and they wrap together below on
-   narrow screens. */
+/* Actions (SQL + Download) flow inline right after the controls — packed left,
+   NOT pushed to the far edge — so Rows/Refresh/SQL/Download sit together with no
+   gap. They wrap below with the controls on narrow screens. */
 .app-toolbar__actions {
   display: flex;
   align-items: flex-end;
   gap: 0.5rem;
   flex: 0 0 auto;
-  margin-left: auto;
   padding-bottom: 0.1rem;
 }
 

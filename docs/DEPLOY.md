@@ -64,6 +64,23 @@ databricks apps get download-hub   # expect ACTIVE / SUCCEEDED
 
 **First start note:** the first start (and any start after a `requirements.txt` change) rebuilds the Python virtualenv from `src/app/requirements.txt` inside the Apps runtime; this can take several minutes before the app reports ACTIVE. Subsequent restarts with unchanged requirements are fast.
 
+**Same bundle name = update, not duplicate.** Deploying with the same `bundle.name` (`download_hub`) + target + user updates the *existing* `download-hub` app in place — you can deploy from a fresh checkout or a different working directory and it still targets the same workspace deployment (state lives in the workspace under `~/.bundle/download_hub/<target>/`, not in your local dir).
+
+### Verifying a deploy actually landed
+
+`databricks bundle run` deploys the app from the **synced bundle files**, and a restart can take minutes. Don't assume it's live — verify the served version. Bump `APP_VERSION` in `src/app/app.yaml` before deploying, then after `bundle run` completes, confirm the app is serving the new build:
+
+```bash
+# App version is rendered in the page footer / admin page.
+TOKEN=$(databricks auth token -p DEFAULT | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://<your-app-host>/admin" | grep -o "App version[^<]*"
+```
+
+> **Gotcha — don't revert config early.** If you keep the committed `databricks.yml` / `app.yaml` as generic placeholders and inject real values (host, warehouse, catalog/schema, export volume) only at deploy time, do **not** `git checkout` those files until *after* the served version confirms the new build. `bundle run` serves whatever was last synced; reverting before the run completes re-syncs the placeholders and leaves the app stuck on the prior version.
+
+> **OBO pages can't be smoke-tested with a bearer token.** A direct `Authorization: Bearer` request does **not** reproduce the Apps proxy's `X-Forwarded-Access-Token` (on-behalf-of-user) flow, so OBO-gated pages/endpoints answer as a *different* identity and may return a spurious 403. Server-side verification is limited to the served version + markup presence; the real reports / volume-browse / admin / download click-through must be done in a browser signed in as a member of the relevant group.
+
 ## 5. Create the two groups
 
 Two Databricks groups gate the app. Create them via the UI or API:
@@ -112,6 +129,29 @@ cat resources/grants.sql | databricks sql --warehouse-id <YOUR-WAREHOUSE-ID>
 ```
 
 > **Known follow-up (account-level federation):** The three `download_hub_app_users` SELECT grants require the group to be resolvable in Unity Catalog. Under account-level identity federation, a group that exists only as a workspace-level SCIM group may not resolve. If a grant fails with `PRINCIPAL_DOES_NOT_EXIST`, see [PERMISSIONS.md](PERMISSIONS.md) — federate the group at the account level first, then re-run the three app-users GRANTs. The app service principal grants (audit write) are unaffected.
+
+### The app service principal must be able to WRITE every registry/audit table
+
+The app SP reads the registry and **writes** several tables (downloads, admin edits, config, change log). It needs `SELECT` **and** `MODIFY` on **all** of these — miss one and the corresponding feature fails, often **silently** (the write errors are swallowed so the page still renders):
+
+| Table | SP needs | Used by | If missing |
+|-------|----------|---------|------------|
+| `report_config` | SELECT, MODIFY | registry + admin save/delete report | admin resource edits fail |
+| `report_view` | SELECT, MODIFY | view switcher + admin save/delete view | admin view edits fail |
+| `app_config` | SELECT, MODIFY | System Config (disclaimer) | disclaimer save silently no-ops |
+| `download_audit` | SELECT, MODIFY | audit-first download logging | **downloads blocked** (audit-first HTTP 500) |
+| `config_audit` | SELECT, MODIFY | admin **Change Log** | change log **silently empty** |
+
+`resources/grants.sql` includes all of these — apply the whole file. If the admin Change Log stays empty or the disclaimer won't save after a mutation, check for a missing `config_audit` / `app_config` MODIFY grant first (it was a real gotcha):
+
+```bash
+databricks api post /api/2.0/sql/statements --json '{
+  "warehouse_id": "<YOUR-WAREHOUSE-ID>",
+  "statement": "SHOW GRANTS ON TABLE <catalog>.<schema>.config_audit",
+  "wait_timeout": "30s"
+}'
+# Expect the app SP client id with MODIFY + SELECT.
+```
 
 ## 7. Configure & rebrand (optional)
 

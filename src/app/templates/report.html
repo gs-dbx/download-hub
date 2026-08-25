@@ -18,6 +18,17 @@
     </p>
   </div>
 
+  {# Surfaced when the source is unreadable (UC-denied, missing table/column,
+     warehouse) or a render error — otherwise the table would just be empty with
+     no explanation. #}
+  {% if notice %}
+  <div class="usa-alert usa-alert--warning usa-alert--slim margin-bottom-2" role="alert" data-role="report-notice">
+    <div class="usa-alert__body">
+      <p class="usa-alert__text">{{ notice }}</p>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="app-toolbar">
     <form class="app-toolbar__filters" onsubmit="return false;">
       <div class="app-field app-field--search">

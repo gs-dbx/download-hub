@@ -1282,17 +1282,30 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
 
     if snap is not None:
         # Distinct values feed each filter dropdown; every filter defaults to
-        # "All" (no constraint). The template prepends the "All" option.
-        for f in report.filters:
-            filter_options[f.field] = distinct_values(snap.rows, f.field)
-            selected_filters[f.field] = ""
-        filtered = apply_filters(snap.rows, selected_filters)
-        searched = apply_search(filtered, "", haystack_for(columns))
-        page_rows, total_rows, total_pages = paginate(
-            searched, 1, _DEFAULT_PAGE_SIZE
-        )
-        cells = display_rows(columns, page_rows)
-        fetched_at = _fmt_ts(snap.fetched_at)
+        # "All" (no constraint). The template prepends the "All" option. Any
+        # unexpected failure building the initial page becomes a notice (never a
+        # raw 500); the traceback is logged so the cause is diagnosable.
+        try:
+            for f in report.filters:
+                filter_options[f.field] = distinct_values(snap.rows, f.field)
+                selected_filters[f.field] = ""
+            filtered = apply_filters(snap.rows, selected_filters)
+            searched = apply_search(filtered, "", haystack_for(columns))
+            page_rows, total_rows, total_pages = paginate(
+                searched, 1, _DEFAULT_PAGE_SIZE
+            )
+            cells = display_rows(columns, page_rows)
+            fetched_at = _fmt_ts(snap.fetched_at)
+        except Exception as exc:  # noqa: BLE001 - render a notice, never a 500
+            import traceback
+            print(
+                f"[download-hub] report_page render failed report_id={report_id!r}: "
+                f"{exc}\n" + traceback.format_exc()
+            )
+            notice = (
+                "Something went wrong preparing this report. Try Refresh, or "
+                "narrow the date/filters."
+            )
 
     can_download = _resolve_can_download(me_user, report)
     disclaimer = await _effective_disclaimer()
@@ -1383,71 +1396,85 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
             status_code=403,
         )
 
-    # Validate the requested date against the OBO date list, but only for a
-    # date-scoped report; an undated report ignores the date param entirely.
-    date = request.query_params.get("date", "")
-    if report.date_field:
-        try:
+    # Everything from here is wrapped so a fragment request NEVER yields a raw
+    # 500 (the JS swaps whatever comes back into <tbody>, so a 500 body blanks
+    # the table). RuntimeError -> the specific message; any other exception ->
+    # a generic message + a logged traceback so the real cause is diagnosable.
+    try:
+        # Validate the requested date against the OBO date list, but only for a
+        # date-scoped report; an undated report ignores the date param entirely.
+        date = request.query_params.get("date", "")
+        if report.date_field:
             _dcols, date_rows = await _run_sql(
                 token,
                 build_report_dates_query_generic(
                     report.source_query, report.date_field
                 ),
             )
-        except RuntimeError as exc:
-            return HTMLResponse(f'<tr><td colspan="{colspan}">{str(exc)}</td></tr>')
-        allowed = {format_report_date(r[0]) for r in date_rows}
-        # "" is the "All dates" sentinel (no date scope); any other value must be
-        # a known date.
-        if date != "" and date not in allowed:
-            raise HTTPException(status_code=400, detail=f"invalid date {date!r}")
-    else:
-        date = ""
+            allowed = {format_report_date(r[0]) for r in date_rows}
+            # "" is the "All dates" sentinel (no date scope). A stale/unknown date
+            # (e.g. after the date list changed) must NOT 500/400 the fragment —
+            # fall back to the latest known date so the table still renders.
+            if date != "" and date not in allowed:
+                date = format_report_date(sorted(allowed, reverse=True)[0]) if allowed else ""
+        else:
+            date = ""
 
-    # Only known filter fields are honored; unknown query keys are ignored.
-    selected_filters: dict[str, str] = {}
-    for f in report.filters:
-        val = request.query_params.get(f.field)
-        if val is not None:
-            selected_filters[f.field] = val
+        # Only known filter fields are honored; unknown query keys are ignored.
+        selected_filters: dict[str, str] = {}
+        for f in report.filters:
+            val = request.query_params.get(f.field)
+            if val is not None:
+                selected_filters[f.field] = val
 
-    q = request.query_params.get("q", "")
-    page = _coerce_page(request.query_params.get("page"))
-    size = _PAGE_SIZES.get(
-        (request.query_params.get("size") or "").lower(), _DEFAULT_PAGE_SIZE
-    )
-    refresh = request.query_params.get("refresh") == "1"
+        q = request.query_params.get("q", "")
+        page = _coerce_page(request.query_params.get("page"))
+        size = _PAGE_SIZES.get(
+            (request.query_params.get("size") or "").lower(), _DEFAULT_PAGE_SIZE
+        )
+        refresh = request.query_params.get("refresh") == "1"
 
-    try:
         snap = await _ensure_snapshot(token, email, report, date, refresh=refresh)
+
+        columns = _effective_columns(report, snap)
+
+        # Any filter not supplied defaults to "All" (no constraint).
+        for f in report.filters:
+            if f.field not in selected_filters:
+                selected_filters[f.field] = ""
+
+        filtered = apply_filters(snap.rows, selected_filters)
+        searched = apply_search(filtered, q, haystack_for(columns))
+        # Optional click-to-sort: only a known display column is honored; numeric
+        # columns (int/pct/float/double) sort by value, others as text. Unknown key
+        # -> no sort. is_numeric_format is the shared source of truth with alignment.
+        sort_key = request.query_params.get("sort", "")
+        sort_dir = request.query_params.get("dir", "asc")
+        if sort_key:
+            col = next((c for c in columns if c.name == sort_key), None)
+            if col is not None:
+                searched = sort_rows(
+                    searched,
+                    sort_key,
+                    sort_dir if sort_dir in ("asc", "desc") else "asc",
+                    numeric=is_numeric_format(col.format),
+                )
+        page_rows, total_rows, total_pages = paginate(searched, page, size)
+        cells = display_rows(columns, page_rows)
     except RuntimeError as exc:
+        # Expected data errors (UC-denied, missing table/column, warehouse, etc.)
+        # already carry a friendly message from errors.friendly_error.
         return HTMLResponse(f'<tr><td colspan="{colspan}">{str(exc)}</td></tr>')
-
-    columns = _effective_columns(report, snap)
-
-    # Any filter not supplied defaults to "All" (no constraint).
-    for f in report.filters:
-        if f.field not in selected_filters:
-            selected_filters[f.field] = ""
-
-    filtered = apply_filters(snap.rows, selected_filters)
-    searched = apply_search(filtered, q, haystack_for(columns))
-    # Optional click-to-sort: only a known display column is honored; numeric
-    # columns (int/pct/float/double) sort by value, others as text. Unknown key
-    # -> no sort. is_numeric_format is the shared source of truth with alignment.
-    sort_key = request.query_params.get("sort", "")
-    sort_dir = request.query_params.get("dir", "asc")
-    if sort_key:
-        col = next((c for c in columns if c.name == sort_key), None)
-        if col is not None:
-            searched = sort_rows(
-                searched,
-                sort_key,
-                sort_dir if sort_dir in ("asc", "desc") else "asc",
-                numeric=is_numeric_format(col.format),
-            )
-    page_rows, total_rows, total_pages = paginate(searched, page, size)
-    cells = display_rows(columns, page_rows)
+    except Exception as exc:  # noqa: BLE001 - never 500 a fragment; log + degrade
+        import traceback
+        print(
+            f"[download-hub] report_table failed report_id={report_id!r}: {exc}\n"
+            + traceback.format_exc()
+        )
+        return HTMLResponse(
+            f'<tr><td colspan="{colspan}">Something went wrong loading this data. '
+            f"Try Refresh, or narrow the date/filters.</td></tr>"
+        )
 
     resp = templates.TemplateResponse(request, "_rows.html", {"rows": cells})
     resp.headers["X-Total-Rows"] = str(total_rows)

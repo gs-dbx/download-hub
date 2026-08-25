@@ -1692,9 +1692,11 @@ async def download(request: Request) -> Response:
         media_type = "text/csv"
     fname = filename_for(report.report_id, date, fmt)
 
-    # 9) AUDIT-FIRST (NFR-5): write exactly one audit row as the app SP; the
-    # INSERT must reach SUCCEEDED before the file is delivered (inline OR spilled
-    # to the volume), else HTTP 500. The delivery mode is recorded in the summary.
+    # 9) AUDIT-FIRST (NFR-5): build exactly one audit row as the app SP; the
+    # INSERT must reach SUCCEEDED before the file/link is delivered (inline OR
+    # spilled to the volume), else HTTP 500. For the spill path the volume upload
+    # runs BEFORE the audit, so a failed upload never records a delivery that did
+    # not happen. The delivery mode is recorded in the summary.
     catalog = _env("APP_CATALOG")
     schema = _env("APP_SCHEMA")
     app_version = _env("APP_VERSION", "0.0.0")
@@ -1716,16 +1718,21 @@ async def download(request: Request) -> Response:
     )
     sql, param_dicts = build_audit_insert(catalog, schema, audit_row)
     audit_params = [StatementParameterListItem(**d) for d in param_dicts]
-    try:
-        await _run_sql_sp(sql, audit_params)
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Download blocked: audit write failed ({exc}).",
-        ) from exc
 
-    # 10a) Inline delivery (at/under the direct cap): return the attachment.
+    async def _write_audit() -> None:
+        """Write the single audit row as the app SP (audit-first); 500 on failure."""
+        try:
+            await _run_sql_sp(sql, audit_params)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Download blocked: audit write failed ({exc}).",
+            ) from exc
+
+    # 10a) Inline delivery (at/under the direct cap): audit-first, then return
+    # the attachment.
     if not spill:
+        await _write_audit()
         print(
             f"[download-hub] download audited: user={email!r} "
             f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
@@ -1740,8 +1747,9 @@ async def download(request: Request) -> Response:
         )
 
     # 10b) Spill delivery: write the file to the export volume as the user (OBO),
-    # under their own per-email subfolder, then tell the UI it's ready + how to
-    # retrieve it (GET /download/retrieve?path=…). Audit already succeeded above.
+    # under their own per-email subfolder, FIRST — so a failed upload never leaves
+    # an audit row claiming a delivery that never happened — THEN write the audit
+    # row before returning the retrieval link (GET /download/retrieve?path=…).
     subpath = f"{_email_slug(email)}/{fname}"
     try:
         vol_path = await asyncio.to_thread(
@@ -1751,6 +1759,7 @@ async def download(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - map SDK/Files errors to friendly text
         raise HTTPException(status_code=502, detail=friendly_volume_error(exc)) from exc
+    await _write_audit()
     print(
         f"[download-hub] export spilled to volume: user={email!r} "
         f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "

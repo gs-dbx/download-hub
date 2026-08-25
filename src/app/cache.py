@@ -114,6 +114,65 @@ class SnapshotCache:
         return len(self._store)
 
 
+class BoundedTTLCache:
+    """A small bounded, TTL-expiring string→string cache with LRU eviction.
+
+    For cheap display/identity lookups (e.g. resolving a numeric SCIM id to an
+    email) that would otherwise accumulate one entry per distinct key for the
+    life of the process. ``get`` returns a still-fresh value or ``None`` (missing
+    or TTL-expired, dropping the expired entry); ``put`` records the value and
+    evicts the least-recently-used entry once the store exceeds ``max_size``.
+    Stdlib-only, so it is unit-testable offline.
+    """
+
+    def __init__(self, max_size: int = 512, ttl_seconds: float | None = None) -> None:
+        """Initialize the cache.
+
+        Args:
+            max_size: Maximum number of entries retained (LRU beyond this).
+            ttl_seconds: Optional time-to-live; an entry older than this is a
+                miss and is dropped on ``get``. ``None`` disables TTL.
+        """
+        self._store: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+
+    def get(self, key: str) -> str | None:
+        """Return the fresh value for ``key`` (marking it MRU), or ``None``.
+
+        Args:
+            key: The lookup key.
+
+        Returns:
+            The stored value, or ``None`` on a miss or TTL expiry.
+        """
+        hit = self._store.get(key)
+        if hit is None:
+            return None
+        ts, value = hit
+        if self._ttl is not None and (time.time() - ts) > self._ttl:
+            del self._store[key]  # expired -> treat as a miss
+            return None
+        self._store.move_to_end(key)  # mark most-recently-used
+        return value
+
+    def put(self, key: str, value: str) -> None:
+        """Store ``value`` under ``key`` (MRU), evicting LRU beyond ``max_size``.
+
+        Args:
+            key: The lookup key.
+            value: The value to cache.
+        """
+        self._store[key] = (time.time(), value)
+        self._store.move_to_end(key)
+        while len(self._store) > self._max_size:
+            self._store.popitem(last=False)  # evict least-recently-used
+
+    def __len__(self) -> int:
+        """Return the number of cached entries."""
+        return len(self._store)
+
+
 def apply_filters(rows: list[dict], filters: dict[str, str]) -> list[dict]:
     """Filter rows by equality across every selected field (AND).
 

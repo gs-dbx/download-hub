@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 
 # Dual-convention imports: the Apps runtime runs from ``src/app/`` with flat
 # imports; the pytest suite imports this module as ``app.exports`` with ``src``
@@ -62,15 +63,42 @@ def filename_for(report_id: str, date: str, fmt: str) -> str:
     return f"{report_id}_{date_part}.{ext}"
 
 
+# Characters that would break or inject a quoted Content-Disposition filename:
+# the double-quote (closes the quoted-string), the backslash (escape), and any
+# ASCII control char incl. CR/LF (header splitting).
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f"\\]')
+
+
+def sanitize_filename(name: str) -> str:
+    """Sanitize a filename for safe use in a ``Content-Disposition`` header.
+
+    Volume file names come from arbitrary Unity Catalog volume contents, so a
+    name containing a double-quote or CR/LF could truncate the header or smuggle
+    a second header. Replace every unsafe character (``"``, ``\\``, and ASCII
+    control chars including CR/LF) with ``_`` and trim surrounding whitespace.
+
+    Args:
+        name: The raw filename (e.g. a volume file basename).
+
+    Returns:
+        A header-safe filename; ``"download"`` if nothing usable remains.
+    """
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("_", name or "").strip()
+    return cleaned or "download"
+
+
 def to_csv_bytes(
     columns: list[ColumnSpec], rows: list[dict], disclaimer: str
 ) -> bytes:
     """Render the export rows as CSV bytes with the disclaimer at the top.
 
-    The disclaimer rides at the very top as leading ``# ``-prefixed single-cell
-    rows, then a blank separator row, then the label header row, then the data
-    rows. Every cell is formatted via :func:`render.cell_text` (all strings), so
-    the CSV matches the on-screen table exactly.
+    When ``disclaimer`` has content it rides at the very top as leading
+    ``# ``-prefixed single-cell rows, then a blank separator row, then the label
+    header row, then the data rows. When ``disclaimer`` is empty/blank (e.g. the
+    admin audit-log export) neither the disclaimer rows nor the blank separator
+    are emitted, so the header is the first row. Every cell is formatted via
+    :func:`render.cell_text` (all strings), so the CSV matches the on-screen
+    table exactly.
 
     Args:
         columns: The report's ordered display columns.
@@ -83,9 +111,14 @@ def to_csv_bytes(
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    for line in disclaimer.splitlines():
-        writer.writerow([f"# {line}"])
-    writer.writerow([])  # blank separator row
+    # Only emit the disclaimer block + blank separator when there is disclaimer
+    # text; an empty/blank disclaimer (e.g. the admin audit-log export) must NOT
+    # produce a leading blank row before the header, or parsers see a blank
+    # header and misaligned columns.
+    if disclaimer.strip():
+        for line in disclaimer.splitlines():
+            writer.writerow([f"# {line}"])
+        writer.writerow([])  # blank separator row
     writer.writerow([c.label for c in columns])
     for row in rows:
         writer.writerow([cell_text(row.get(c.name), c.format) for c in columns])

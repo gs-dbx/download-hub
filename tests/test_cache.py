@@ -7,6 +7,7 @@ No fastapi, no databricks.sdk, no pyspark, no network — runs offline
 import time
 
 from app.cache import (
+    BoundedTTLCache,
     Snapshot,
     SnapshotCache,
     apply_filters,
@@ -91,6 +92,46 @@ def test_cache_evict_removes():
     assert c.get(key) is None
     c.evict(key)  # no error on missing key
     assert len(c) == 0
+
+
+# --- BoundedTTLCache -----------------------------------------------------
+
+
+def test_bounded_ttl_cache_hit_and_miss():
+    c = BoundedTTLCache(max_size=8, ttl_seconds=100.0)
+    assert c.get("k") is None
+    c.put("k", "v")
+    assert c.get("k") == "v"
+
+
+def test_bounded_ttl_cache_lru_eviction():
+    """Beyond max_size the least-recently-used key is evicted (bounds growth)."""
+    c = BoundedTTLCache(max_size=2)
+    c.put("a", "1")
+    c.put("b", "2")
+    c.put("c", "3")
+    assert len(c) == 2
+    assert c.get("a") is None  # a was LRU -> evicted
+    assert c.get("b") == "2"
+    assert c.get("c") == "3"
+
+
+def test_bounded_ttl_cache_get_moves_to_mru():
+    c = BoundedTTLCache(max_size=2)
+    c.put("a", "1")
+    c.put("b", "2")
+    assert c.get("a") == "1"  # touch a -> MRU; b is now LRU
+    c.put("c", "3")
+    assert c.get("b") is None  # b evicted, not a
+    assert c.get("a") == "1"
+
+
+def test_bounded_ttl_cache_ttl_expiry():
+    c = BoundedTTLCache(max_size=8, ttl_seconds=0.01)
+    c.put("k", "v")
+    time.sleep(0.02)
+    assert c.get("k") is None  # expired -> miss
+    assert len(c) == 0  # expired entry dropped
 
 
 # --- apply_filters -------------------------------------------------------

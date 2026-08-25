@@ -56,6 +56,7 @@ from auth import (
     parse_scim_user_id,
 )
 from cache import (
+    BoundedTTLCache,
     Snapshot,
     SnapshotCache,
     apply_filters,
@@ -74,8 +75,14 @@ from config import (
     resolve_disclaimer,
 )
 from errors import ReportDataError, friendly_error
-from exports import DEFAULT_DISCLAIMER, filename_for, to_csv_bytes, to_xlsx_bytes
-from render import display_rows, haystack_for, header_cells
+from exports import (
+    DEFAULT_DISCLAIMER,
+    filename_for,
+    sanitize_filename,
+    to_csv_bytes,
+    to_xlsx_bytes,
+)
+from render import display_rows, haystack_for, header_cells, is_numeric_format
 from reports import (
     AUDIT_LOG_COLUMNS,
     CONFIG_AUDIT_COLUMNS,
@@ -598,8 +605,9 @@ def _readable_email(me_user, header_email: str) -> str:
 # Resolve a stored raw forwarded numeric SCIM id ("<user_id>@<workspace_id>") to
 # the user's email for display (see auth.parse_scim_user_id). Anything else (a
 # real email/name) passes through unchanged. Cached per user_id with a TTL.
-_email_display_cache: dict[str, tuple[float, str]] = {}
-_EMAIL_DISPLAY_TTL = 3600.0
+# Bounded so a long-lived process serving many distinct historical users in the
+# audit/change logs cannot grow this without limit (LRU beyond max_size, 1h TTL).
+_email_display_cache = BoundedTTLCache(max_size=2048, ttl_seconds=3600.0)
 
 
 def _display_email(value: str) -> str:
@@ -621,10 +629,9 @@ def _display_email(value: str) -> str:
     user_id = parse_scim_user_id(value)
     if not user_id:
         return value
-    now = time.time()
-    hit = _email_display_cache.get(user_id)
-    if hit and (now - hit[0]) < _EMAIL_DISPLAY_TTL:
-        return hit[1]
+    cached = _email_display_cache.get(user_id)
+    if cached is not None:
+        return cached
     resolved = value
     try:
         u = _app_sp_client().users.get(id=user_id)
@@ -632,7 +639,7 @@ def _display_email(value: str) -> str:
     except Exception as exc:  # noqa: BLE001 - display-only; never break the page
         print(f"[download-hub] identity resolve failed for {user_id!r}: {exc}")
         resolved = value
-    _email_display_cache[user_id] = (now, str(resolved))
+    _email_display_cache.put(user_id, str(resolved))
     return str(resolved)
 
 
@@ -1426,7 +1433,8 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     filtered = apply_filters(snap.rows, selected_filters)
     searched = apply_search(filtered, q, haystack_for(columns))
     # Optional click-to-sort: only a known display column is honored; numeric
-    # columns (int/pct) sort by value, others as text. Unknown key -> no sort.
+    # columns (int/pct/float/double) sort by value, others as text. Unknown key
+    # -> no sort. is_numeric_format is the shared source of truth with alignment.
     sort_key = request.query_params.get("sort", "")
     sort_dir = request.query_params.get("dir", "asc")
     if sort_key:
@@ -1436,7 +1444,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
                 searched,
                 sort_key,
                 sort_dir if sort_dir in ("asc", "desc") else "asc",
-                numeric=col.format in ("int", "pct"),
+                numeric=is_numeric_format(col.format),
             )
     page_rows, total_rows, total_pages = paginate(searched, page, size)
     cells = display_rows(columns, page_rows)
@@ -1584,7 +1592,12 @@ async def download(request: Request) -> Response:
             status_code=403,
             detail="You are not authorized to download this data.",
         )
-    # Prefer the readable email over the numeric X-Forwarded-User id for the audit.
+    # Keep the raw X-Forwarded-User id to key the snapshot cache — report_page /
+    # report_table key by that raw header (on GovCloud a numeric SCIM id, not an
+    # email), so reusing it here reuses the exact snapshot the table just fetched
+    # instead of a fresh full OBO re-read + a duplicate cache entry (LOCKED L2).
+    # The readable email is only for the audit row, the spill subfolder, and logs.
+    snapshot_email = email
     email = _readable_email(me_user, email)
 
     # 4) Validate acknowledgement + justification.
@@ -1619,9 +1632,10 @@ async def download(request: Request) -> Response:
     else:
         date = ""
 
-    # 6) Read/reuse the per-user OBO snapshot for (report, date).
+    # 6) Read/reuse the per-user OBO snapshot for (report, date). Keyed by the
+    # raw header id (snapshot_email) so it matches the table's cache entry.
     try:
-        snap = await _ensure_snapshot(token, email, report, date)
+        snap = await _ensure_snapshot(token, snapshot_email, report, date)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1678,9 +1692,11 @@ async def download(request: Request) -> Response:
         media_type = "text/csv"
     fname = filename_for(report.report_id, date, fmt)
 
-    # 9) AUDIT-FIRST (NFR-5): write exactly one audit row as the app SP; the
-    # INSERT must reach SUCCEEDED before the file is delivered (inline OR spilled
-    # to the volume), else HTTP 500. The delivery mode is recorded in the summary.
+    # 9) AUDIT-FIRST (NFR-5): build exactly one audit row as the app SP; the
+    # INSERT must reach SUCCEEDED before the file/link is delivered (inline OR
+    # spilled to the volume), else HTTP 500. For the spill path the volume upload
+    # runs BEFORE the audit, so a failed upload never records a delivery that did
+    # not happen. The delivery mode is recorded in the summary.
     catalog = _env("APP_CATALOG")
     schema = _env("APP_SCHEMA")
     app_version = _env("APP_VERSION", "0.0.0")
@@ -1702,16 +1718,21 @@ async def download(request: Request) -> Response:
     )
     sql, param_dicts = build_audit_insert(catalog, schema, audit_row)
     audit_params = [StatementParameterListItem(**d) for d in param_dicts]
-    try:
-        await _run_sql_sp(sql, audit_params)
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Download blocked: audit write failed ({exc}).",
-        ) from exc
 
-    # 10a) Inline delivery (at/under the direct cap): return the attachment.
+    async def _write_audit() -> None:
+        """Write the single audit row as the app SP (audit-first); 500 on failure."""
+        try:
+            await _run_sql_sp(sql, audit_params)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Download blocked: audit write failed ({exc}).",
+            ) from exc
+
+    # 10a) Inline delivery (at/under the direct cap): audit-first, then return
+    # the attachment.
     if not spill:
+        await _write_audit()
         print(
             f"[download-hub] download audited: user={email!r} "
             f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
@@ -1720,12 +1741,15 @@ async def download(request: Request) -> Response:
         return Response(
             content=file_bytes,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+            },
         )
 
     # 10b) Spill delivery: write the file to the export volume as the user (OBO),
-    # under their own per-email subfolder, then tell the UI it's ready + how to
-    # retrieve it (GET /download/retrieve?path=…). Audit already succeeded above.
+    # under their own per-email subfolder, FIRST — so a failed upload never leaves
+    # an audit row claiming a delivery that never happened — THEN write the audit
+    # row before returning the retrieval link (GET /download/retrieve?path=…).
     subpath = f"{_email_slug(email)}/{fname}"
     try:
         vol_path = await asyncio.to_thread(
@@ -1735,6 +1759,7 @@ async def download(request: Request) -> Response:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - map SDK/Files errors to friendly text
         raise HTTPException(status_code=502, detail=friendly_volume_error(exc)) from exc
+    await _write_audit()
     print(
         f"[download-hub] export spilled to volume: user={email!r} "
         f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
@@ -1799,7 +1824,9 @@ async def download_retrieve(request: Request, path: str) -> Response:
     return Response(
         content=data,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )
 
 
@@ -1964,7 +1991,9 @@ async def volume_download(request: Request, report_id: str) -> Response:
     return Response(
         content=file_bytes,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )
 
 
@@ -2454,5 +2483,7 @@ async def admin_audit_csv(request: Request) -> Response:
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )

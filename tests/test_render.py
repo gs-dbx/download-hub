@@ -11,6 +11,7 @@ from app.render import (
     format_float,
     haystack_for,
     header_cells,
+    is_numeric_format,
     pct_class,
 )
 from app.reports import ColumnSpec
@@ -137,6 +138,29 @@ def test_align_class_numeric_right():
 def test_align_class_text_empty():
     assert align_class("text") == ""
     assert align_class("currency") == ""
+
+
+# --- is_numeric_format ---------------------------------------------------
+
+
+def test_is_numeric_format_includes_float_double():
+    """float/double are numeric so click-to-sort compares them by value, not text."""
+    assert is_numeric_format("int") is True
+    assert is_numeric_format("pct") is True
+    assert is_numeric_format("float") is True
+    assert is_numeric_format("double") is True
+
+
+def test_is_numeric_format_text_false():
+    assert is_numeric_format("text") is False
+    assert is_numeric_format("") is False
+    assert is_numeric_format("currency") is False
+
+
+def test_is_numeric_format_matches_align_class():
+    """Alignment and sort share one source of truth — they must never diverge."""
+    for fmt in ("int", "pct", "float", "double", "text", "currency", ""):
+        assert (align_class(fmt) == "text-right") == is_numeric_format(fmt)
 
 
 # --- header_cells --------------------------------------------------------

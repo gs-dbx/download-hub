@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 
 # Dual-convention imports: the Apps runtime runs from ``src/app/`` with flat
 # imports; the pytest suite imports this module as ``app.exports`` with ``src``
@@ -60,6 +61,30 @@ def filename_for(report_id: str, date: str, fmt: str) -> str:
     date_part = (date or "").strip().split(" ")[0]
     ext = "xlsx" if fmt == "xlsx" else "csv"
     return f"{report_id}_{date_part}.{ext}"
+
+
+# Characters that would break or inject a quoted Content-Disposition filename:
+# the double-quote (closes the quoted-string), the backslash (escape), and any
+# ASCII control char incl. CR/LF (header splitting).
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f"\\]')
+
+
+def sanitize_filename(name: str) -> str:
+    """Sanitize a filename for safe use in a ``Content-Disposition`` header.
+
+    Volume file names come from arbitrary Unity Catalog volume contents, so a
+    name containing a double-quote or CR/LF could truncate the header or smuggle
+    a second header. Replace every unsafe character (``"``, ``\\``, and ASCII
+    control chars including CR/LF) with ``_`` and trim surrounding whitespace.
+
+    Args:
+        name: The raw filename (e.g. a volume file basename).
+
+    Returns:
+        A header-safe filename; ``"download"`` if nothing usable remains.
+    """
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("_", name or "").strip()
+    return cleaned or "download"
 
 
 def to_csv_bytes(

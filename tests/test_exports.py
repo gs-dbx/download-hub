@@ -7,7 +7,12 @@ No fastapi, no databricks.sdk, no network. The XLSX test is guarded by
 
 import pytest
 
-from app.exports import DEFAULT_DISCLAIMER, filename_for, to_csv_bytes
+from app.exports import (
+    DEFAULT_DISCLAIMER,
+    filename_for,
+    sanitize_filename,
+    to_csv_bytes,
+)
 from app.reports import ColumnSpec
 
 _COLUMNS = [
@@ -102,6 +107,37 @@ def test_filename_for_sanitizes_and_picks_extension(report_id, date, fmt, expect
 def test_filename_for_unknown_format_defaults_csv():
     """An unrecognized format falls back to the .csv extension."""
     assert filename_for("daily_metrics", "2026-01-12 00:00:00", "pdf").endswith(".csv")
+
+
+# --- sanitize_filename (Content-Disposition safety) ----------------------
+
+
+def test_sanitize_filename_passes_through_normal_names():
+    assert sanitize_filename("Q3 report (final).pdf") == "Q3 report (final).pdf"
+    assert sanitize_filename("daily_metrics_2026-01-12.csv") == "daily_metrics_2026-01-12.csv"
+
+
+def test_sanitize_filename_neutralizes_quote_and_backslash():
+    """A double-quote/backslash cannot terminate or escape the quoted filename."""
+    assert '"' not in sanitize_filename('evil".pdf')
+    assert "\\" not in sanitize_filename("a\\b.pdf")
+
+
+def test_sanitize_filename_strips_crlf_header_injection():
+    """CR/LF (and other control chars) cannot split the header."""
+    out = sanitize_filename("a\r\nSet-Cookie: x=1.pdf")
+    assert "\r" not in out and "\n" not in out
+
+
+def test_sanitize_filename_empty_falls_back():
+    assert sanitize_filename("") == "download"
+    assert sanitize_filename("   ") == "download"  # whitespace-only -> fallback
+    assert sanitize_filename(None) == "download"  # defensive: None -> fallback
+
+
+def test_sanitize_filename_single_unsafe_char_becomes_underscore():
+    """A name of only unsafe chars maps to underscores (still non-empty)."""
+    assert sanitize_filename('"') == "_"
 
 
 def test_to_xlsx_bytes_returns_zip_bytes():

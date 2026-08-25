@@ -74,7 +74,13 @@ from config import (
     resolve_disclaimer,
 )
 from errors import ReportDataError, friendly_error
-from exports import DEFAULT_DISCLAIMER, filename_for, to_csv_bytes, to_xlsx_bytes
+from exports import (
+    DEFAULT_DISCLAIMER,
+    filename_for,
+    sanitize_filename,
+    to_csv_bytes,
+    to_xlsx_bytes,
+)
 from render import display_rows, haystack_for, header_cells, is_numeric_format
 from reports import (
     AUDIT_LOG_COLUMNS,
@@ -1721,7 +1727,9 @@ async def download(request: Request) -> Response:
         return Response(
             content=file_bytes,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+            },
         )
 
     # 10b) Spill delivery: write the file to the export volume as the user (OBO),
@@ -1800,7 +1808,9 @@ async def download_retrieve(request: Request, path: str) -> Response:
     return Response(
         content=data,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )
 
 
@@ -1965,7 +1975,9 @@ async def volume_download(request: Request, report_id: str) -> Response:
     return Response(
         content=file_bytes,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )
 
 
@@ -2455,5 +2467,7 @@ async def admin_audit_csv(request: Request) -> Response:
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
+        },
     )

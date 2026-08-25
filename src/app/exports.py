@@ -67,10 +67,13 @@ def to_csv_bytes(
 ) -> bytes:
     """Render the export rows as CSV bytes with the disclaimer at the top.
 
-    The disclaimer rides at the very top as leading ``# ``-prefixed single-cell
-    rows, then a blank separator row, then the label header row, then the data
-    rows. Every cell is formatted via :func:`render.cell_text` (all strings), so
-    the CSV matches the on-screen table exactly.
+    When ``disclaimer`` has content it rides at the very top as leading
+    ``# ``-prefixed single-cell rows, then a blank separator row, then the label
+    header row, then the data rows. When ``disclaimer`` is empty/blank (e.g. the
+    admin audit-log export) neither the disclaimer rows nor the blank separator
+    are emitted, so the header is the first row. Every cell is formatted via
+    :func:`render.cell_text` (all strings), so the CSV matches the on-screen
+    table exactly.
 
     Args:
         columns: The report's ordered display columns.
@@ -83,9 +86,14 @@ def to_csv_bytes(
     """
     buf = io.StringIO()
     writer = csv.writer(buf)
-    for line in disclaimer.splitlines():
-        writer.writerow([f"# {line}"])
-    writer.writerow([])  # blank separator row
+    # Only emit the disclaimer block + blank separator when there is disclaimer
+    # text; an empty/blank disclaimer (e.g. the admin audit-log export) must NOT
+    # produce a leading blank row before the header, or parsers see a blank
+    # header and misaligned columns.
+    if disclaimer.strip():
+        for line in disclaimer.splitlines():
+            writer.writerow([f"# {line}"])
+        writer.writerow([])  # blank separator row
     writer.writerow([c.label for c in columns])
     for row in rows:
         writer.writerow([cell_text(row.get(c.name), c.format) for c in columns])

@@ -66,6 +66,26 @@ def test_disclaimer_precedes_header_in_csv():
     assert text.index("# ") < text.index("Metric,2026,2025,% Change")
 
 
+def test_to_csv_bytes_empty_disclaimer_has_no_leading_blank_row():
+    """An empty disclaimer emits the header as the FIRST row (no blank line).
+
+    The admin audit-log export passes disclaimer="" — previously the
+    unconditional separator row put a blank line before the header, so a CSV
+    parser saw an empty header and misaligned columns.
+    """
+    text = to_csv_bytes(_COLUMNS, _ROWS, "").decode("utf-8")
+    lines = text.splitlines()
+    assert lines[0] == "Metric,2026,2025,% Change"
+    # No leading '# ' disclaimer line, no blank separator.
+    assert "# " not in text
+
+
+def test_to_csv_bytes_whitespace_disclaimer_has_no_leading_blank_row():
+    """A whitespace-only disclaimer is treated as empty (header first)."""
+    lines = to_csv_bytes(_COLUMNS, _ROWS, "   \n  ").decode("utf-8").splitlines()
+    assert lines[0] == "Metric,2026,2025,% Change"
+
+
 @pytest.mark.parametrize(
     "report_id,date,fmt,expected",
     [

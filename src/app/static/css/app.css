@@ -270,6 +270,12 @@ body {
   display: flex;
   flex-direction: column;
 }
+/* .app-field sets display:flex, which overrides the HTML `hidden` attribute
+   (equal specificity, app.css loads after USWDS' [hidden]{display:none}). So a
+   `<div class="app-field" hidden>` (e.g. the admin volume-path field, shown only
+   for Volume resources, or the column-builder) stayed visible. Re-assert hidden
+   with higher specificity so admin.js's toggle actually hides these. */
+.app-field[hidden] { display: none; }
 /* USWDS labels add top margin; zero it so fields bottom-align cleanly. */
 .app-field .usa-label { margin-top: 0; }
 .app-field .usa-input,

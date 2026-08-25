@@ -113,13 +113,141 @@ body {
 .app-pct--neg { color: var(--app-neg); font-weight: 600; }
 .app-pct--muted { color: var(--app-muted); }
 
+/* ---- Report tab nav ---- */
+.app-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  border-bottom: 2px solid var(--app-border);
+  margin-top: 1rem;
+  padding-bottom: 0;
+}
+
+.app-tab {
+  display: inline-block;
+  padding: 0.6rem 0.25rem;
+  color: var(--app-blue);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+}
+
+.app-tab:hover {
+  color: var(--app-navy);
+  border-bottom-color: var(--app-border);
+}
+
+.app-tab--active {
+  color: var(--app-navy);
+  border-bottom-color: var(--app-accent);
+}
+
+/* ---- Pager ---- */
+.app-pager {
+  margin-top: 1rem;
+  color: var(--app-muted);
+  font-size: 0.9rem;
+}
+.app-pager__controls {
+  display: inline-flex;
+  gap: 0.5rem;
+  margin-left: 0.75rem;
+}
+
+/* Generic filter/size/refresh fields share the search field's flex behavior. */
+.app-field--filter { flex: 0 0 8rem; }
+.app-field--size   { flex: 0 0 6rem; }
+.app-field--refresh { flex: 0 0 auto; justify-content: flex-end; }
+.app-field--refresh .usa-button { margin-top: 0.25rem; }
+
+/* ---- Control bar: filters left, Download action right, one aligned row ---- */
+.app-toolbar {
+  display: flex;
+  align-items: flex-end;      /* bottom-align the button with the inputs */
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin: 0 0 1.25rem 0;
+}
+
+.app-toolbar__filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 1rem;
+  flex: 1 1 auto;
+  margin: 0;                  /* override usa-form spacing */
+  max-width: none;
+}
+
+.app-field {
+  display: flex;
+  flex-direction: column;
+}
+/* USWDS labels add top margin; zero it so fields bottom-align cleanly. */
+.app-field .usa-label { margin-top: 0; }
+.app-field .usa-input,
+.app-field .usa-select { margin-top: 0.25rem; width: 100%; max-width: 100%; }
+
+.app-field--search { flex: 1 1 18rem; }
+.app-field--date   { flex: 0 0 15rem; }   /* room for "2026-01-12 00:00:00" */
+.app-field--drain  { flex: 0 0 8rem; }
+
+.app-toolbar__actions {
+  flex: 0 0 auto;
+  padding-bottom: 0.1rem;
+}
+
+/* Accent-colored, icon-leading Download button (navy with gold hover). */
+.app-download-btn {
+  background-color: var(--app-navy);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.app-download-btn:hover {
+  background-color: var(--app-blue);
+}
+.app-download-btn .usa-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: currentColor;
+}
+
+/* ---- Sortable column headers ---- */
+/* The header button fills the cell so the whole header is clickable; it inherits
+   the thead's white-on-navy color. A ▲/▼ indicator appears via aria-sort. */
+.app-th-sort { padding: 0; }
+.app-sort-btn {
+  display: flex;
+  align-items: center;
+  justify-content: inherit;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  font-weight: 700;
+  text-align: inherit;
+  cursor: pointer;
+}
+.app-th-sort.text-right .app-sort-btn { justify-content: flex-end; }
+.app-sort-btn:hover { text-decoration: underline; }
+.app-sort-btn:focus-visible { outline: 2px solid var(--app-accent); outline-offset: -2px; }
+/* Reserve space for the indicator so headers don't shift when sort toggles. */
+.app-sort-ind { width: 0.7em; display: inline-block; text-align: center; opacity: 0.9; }
+.app-th-sort[aria-sort="ascending"] .app-sort-ind::after { content: "\25B2"; }   /* ▲ */
+.app-th-sort[aria-sort="descending"] .app-sort-ind::after { content: "\25BC"; }  /* ▼ */
+
 /* ---- Loading spinner overlay (table reloads + downloads) ---- */
 .app-table-wrap {
   position: relative;
+  overflow-x: auto; /* wide tables scroll inside the wrapper, not the page */
 }
-
-/* Wide tables scroll inside the wrapper rather than stretching the page. */
-.app-table-wrap { overflow-x: auto; }
 
 /* Dim + block the table while loading; the overlay sits above it. */
 .app-spinner {
@@ -195,6 +323,116 @@ select,
   user-select: text;
 }
 
+/* ---- Volume browser (folder/file listing) ---- */
+/* Breadcrumb trail above the listing; each ancestor is a link-styled button. */
+.app-breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 1rem 0;
+  font-size: 0.95rem;
+}
+.app-breadcrumbs__sep { color: var(--app-muted); }
+.app-crumb {
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--app-blue);
+  font-weight: 600;
+  cursor: pointer;
+}
+.app-crumb:hover { color: var(--app-navy); text-decoration: underline; }
+.app-crumb:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
+.app-breadcrumbs__current { color: var(--app-navy); font-weight: 700; }
+
+/* Folder name is a drill-in link button; file name is plain text; both icon-leading. */
+.app-vol-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--app-blue);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.app-vol-name:hover { color: var(--app-navy); text-decoration: underline; }
+.app-vol-name:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 2px; }
+.app-vol-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--app-text);
+}
+.app-vol-icon { width: 1.15rem; height: 1.15rem; flex: 0 0 auto; fill: var(--app-navy); }
+.app-vol-file .app-vol-icon { fill: var(--app-muted); }
+
+/* Size / Modified columns: compact, right-aligned size, muted timestamp. */
+.usa-table td.app-vol-size {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.app-vol-meta { color: var(--app-muted); white-space: nowrap; }
+.usa-table td.app-vol-actions { text-align: right; }
+.usa-table td.app-vol-actions .usa-button { margin: 0; }
+
+/* Small outline download button per file row (icon-leading). */
+.app-vol-dl {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+.app-vol-dl .usa-icon { width: 1rem; height: 1rem; fill: currentColor; }
+
+/* File name shown inside the volume download modal. */
+.app-vol-dl-name { font-weight: 700; word-break: break-all; }
+
+/* ---- "View SQL" disclosure (the exact query behind a report) ---- */
+.app-sql {
+  margin: -0.5rem 0 1rem 0;
+}
+.app-sql__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--app-blue);
+}
+.app-sql__toggle .usa-icon { width: 1rem; height: 1rem; fill: currentColor; }
+.app-sql__toggle:hover { color: var(--app-navy); }
+.app-sql__panel {
+  margin-top: 0.5rem;
+}
+.app-sql__panel[hidden] { display: none; }
+/* Readonly, monospace, copyable (exempt from the copy deterrent as a form control). */
+.app-sql__text {
+  width: 100%;
+  max-width: 100%;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--app-text);
+  background-color: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: 0.25rem;
+  padding: 0.6rem 0.75rem;
+  white-space: pre;
+  overflow-x: auto;
+  resize: vertical;
+}
+.app-sql__text:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: -1px;
+}
 /* ---- Tab row: tabs (left) + view switcher & admin (top-right), one border --- */
 .app-tabrow {
   display: flex;
@@ -307,101 +545,114 @@ select,
   gap: 0.75rem;
 }
 
-/* ---- Report tab nav ---- */
-.app-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1.25rem;
-  padding-bottom: 0;
-}
 
-.app-tab {
-  display: inline-block;
-  padding: 0.6rem 0.25rem;
-  color: var(--app-blue);
-  font-weight: 600;
-  text-decoration: none;
-  border-bottom: 3px solid transparent;
-  margin-bottom: -2px;
-}
 
-.app-tab:hover {
-  color: var(--app-navy);
-  border-bottom-color: var(--app-border);
-}
-
-.app-tab--active {
-  color: var(--app-navy);
-  border-bottom-color: var(--app-accent);
-}
-
-/* ---- Pager ---- */
-.app-pager {
-  margin-top: 1rem;
-  color: var(--app-muted);
-  font-size: 0.9rem;
-}
-.app-pager__controls {
-  display: inline-flex;
-  gap: 0.5rem;
-  margin-left: 0.75rem;
-}
-
-/* ---- Control bar: filters flow left-to-right, Download aligned right ---- */
-.app-toolbar {
-  display: flex;
-  align-items: flex-end;      /* bottom-align the button with the inputs */
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.5rem;
-  margin: 0 0 1.25rem 0;
-}
-
-.app-toolbar__filters {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 0.75rem 1rem;
-  flex: 1 1 auto;
-  margin: 0;                  /* override usa-form spacing */
-  max-width: none;
-}
-
-.app-field {
-  display: flex;
-  flex-direction: column;
-}
-/* USWDS labels add top margin; zero it so fields bottom-align cleanly. */
-.app-field .usa-label { margin-top: 0; font-size: 0.93rem; }
-.app-field .usa-input,
-.app-field .usa-select { margin-top: 0.25rem; width: 100%; max-width: 100%; }
-
-/* Explicit per-field widths so the row lays out horizontally and wraps cleanly. */
-.app-field--search { flex: 1 1 14rem; max-width: 22rem; }
-.app-field--date   { flex: 0 0 13rem; }   /* room for "2026-01-12 00:00:00" */
-.app-field--filter { flex: 0 0 10rem; }
-.app-field--size   { flex: 0 0 6.5rem; }
-.app-field--refresh { flex: 0 0 auto; align-self: flex-end; }
-.app-field--refresh .usa-button { margin-top: 0.25rem; white-space: nowrap; }
-
-.app-toolbar__actions {
-  flex: 0 0 auto;
-  align-self: flex-end;
-  padding-bottom: 0.1rem;
-}
-
-/* Accent-colored, icon-leading Download button (navy with gold hover). */
-.app-download-btn {
-  background-color: var(--app-navy);
+/* ---- SQL warehouse status badge (header) ---- */
+.app-whstatus {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+  margin-left: auto;               /* push to the right edge of the header */
+  font-size: 0.85rem;
+  color: var(--app-muted);
+  white-space: nowrap;
 }
-.app-download-btn:hover {
-  background-color: var(--app-blue);
+.app-whstatus__dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background-color: var(--app-muted);   /* default/unknown */
+  flex: 0 0 auto;
 }
-.app-download-btn .usa-icon {
-  width: 1.15rem;
-  height: 1.15rem;
-  fill: currentColor;
+.app-whstatus__dot--running { background-color: var(--app-pos); }
+.app-whstatus__dot--starting {
+  background-color: var(--app-accent);
+  animation: app-pulse 1.2s ease-in-out infinite;
 }
+.app-whstatus__dot--stopped { background-color: var(--app-neg); }
+.app-whstatus__dot--unknown { background-color: var(--app-muted); }
+@keyframes app-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) {
+  .app-whstatus__dot--starting { animation: none; }
+}
+
+/* ---- Full-page navigation overlay (link-click spinner) ---- */
+.app-navoverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(255, 255, 255, 0.55);
+}
+.app-navoverlay[hidden] { display: none; }
+
+/* ---- Table-head strip: subtle SQL button, right-aligned ---- */
+.app-tablehead {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.25rem 0;
+}
+.app-sqlbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.app-sqlbtn .usa-icon { width: 1rem; height: 1rem; fill: currentColor; }
+
+/* ---- SQL modal: self-controlled overlay (not a USWDS modal) ---- */
+.app-sqlmodal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background-color: rgba(11, 34, 101, 0.45);   /* navy-tinted backdrop */
+}
+.app-sqlmodal[hidden] { display: none; }
+.app-sqlmodal__panel {
+  background-color: var(--app-panel);
+  width: 100%;
+  max-width: 48rem;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 1.5rem;
+  border-radius: 0.5rem;
+  border-top: 4px solid var(--app-navy);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.app-sqlmodal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.app-sqlmodal__title {
+  margin: 0;
+  color: var(--app-navy);
+  font-size: 1.25rem;
+}
+.app-sqlmodal__close {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: var(--app-muted);
+  line-height: 1;
+}
+.app-sqlmodal__close:hover { color: var(--app-navy); }
+.app-sqlmodal__close .usa-icon { width: 1.5rem; height: 1.5rem; fill: currentColor; }
+
+/* ---- Admin table row actions: keep Edit + Delete on one line ---- */
+.app-row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.app-row-actions .app-inline-form { margin: 0; display: inline-flex; }
+.app-row-actions .usa-button { margin: 0; white-space: nowrap; }

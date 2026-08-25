@@ -53,9 +53,11 @@ GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_app_users_dl`;
 GRANT USE CATALOG ON CATALOG main TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 GRANT USE SCHEMA ON SCHEMA main.default TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 
--- Audit table: write (audit-first) + read (Audit Log tab / CSV export).
+-- Audit tables: write (audit-first) + read (Audit Log tab / CSV export).
 GRANT MODIFY ON TABLE main.default.download_audit TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 GRANT SELECT ON TABLE main.default.download_audit TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+GRANT MODIFY ON TABLE main.default.config_audit   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+GRANT SELECT ON TABLE main.default.config_audit   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 
 -- Registry tables: read (report/view/config load) + write (admin console upserts).
 GRANT SELECT ON TABLE main.default.report_config TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;

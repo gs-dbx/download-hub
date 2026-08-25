@@ -13,12 +13,10 @@ All app configuration comes from environment variables in `src/app/app.yaml`. Se
 | `APP_ORG_NAME` | (falls back to `APP_NAME`) | Logo `alt` text / accessibility label |
 | `APP_LOGO` | `/static/img/logo.svg` | Path to logo image (must be `/static/...` for air-gap compliance) |
 | `APP_VERSION` | `0.0.0` | Semantic version string (recorded in audit logs) |
+| `ADMIN_GROUP` | `download_hub_admin_users` | Databricks group whose members get the `/admin` console |
+| `DOWNLOAD_GROUP_SUFFIX` | `_dl` | Suffix appended to a report's `view_key` to derive its download group when `download_group` is unset |
 | `DOWNLOADS_ENABLED` | `true` | Global kill switch (`false`/`0`/`no`/`off` disables downloads) |
 | `DOWNLOAD_DISCLAIMER` | (see below) | Custom data-handling notice (optional; falls back to built-in generic) |
-| `ADMIN_GROUP` | `download_hub_admin_users` | Databricks group whose members can use the `/admin` console (manage views + reports) |
-| `DOWNLOAD_GROUP_SUFFIX` | `_dl` | Suffix appended to a report's `view_key` to derive its download group when no explicit `download_group` is set |
-| `MAX_DOWNLOAD_ROWS` | `100000` | Max rows for a CSV export (the file is built in memory). Over it, the download returns HTTP 413 with a "narrow your filters" message. Raise only if the app container is sized up. |
-| `MAX_XLSX_ROWS` | `25000` | Max rows for an Excel export (openpyxl is far heavier per cell than CSV). Over it, the user is asked to narrow filters or choose CSV. |
 
 ### How branding resolves
 
@@ -74,38 +72,24 @@ Re-enable by setting back to `"true"` (or omitting it, defaults to `"true"`).
 
 The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and every ~300 seconds (TTL-cached).
 
-> **Query model.** A report is defined by a full `source_query` (a single `SELECT`), not a bare table. Displayed columns default to every column the query returns; configure `columns_json` only to narrow/relabel/format them. `date_field` and `filters_json` are both optional — omit `date_field` to show all rows with no date selector.
-
-> **Views & access.** Each report also has a **`view_key`** — the view (tab set) it belongs to, which is also the Databricks group that grants view access. A user sees a report if they belong to its `view_key` group **OR** its download group; the download group is `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`) unless `download_group` is set explicitly. Views are titled/ordered in the **`report_view`** registry (`view_key`, `title`, `display_order`, `enabled`); the `title` shows in the view switcher. A user in more than one view sees a switcher at the top. Admins (members of `ADMIN_GROUP`) manage both registries at **`/admin`** — including a query builder that runs a query and lets them pick the display columns and filters.
-
-### `report_view` registry
-
-| Column | Type | Meaning |
-|--------|------|---------|
-| `view_key` | STRING | Stable key AND the Databricks group that grants view access (bare identifier). Reports reference it via `view_key`. **MERGE key.** |
-| `title` | STRING | Label shown in the view switcher pulldown. |
-| `display_order` | INT | Order among views in the switcher. |
-| `enabled` | BOOLEAN | Whether the view is active. |
-| `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (the admin console stamps the editor's email). |
-
-To add a user to a view: add them to the `view_key` Databricks group (and to `<view_key>_dl` to let them download). No app change needed.
-
 ### Full schema
 
 | Column | Type | Meaning |
 |--------|------|---------|
 | `report_id` | STRING | Stable registry key (bare SQL identifier, e.g. `daily_metrics`). **MERGE key.** |
 | `title` | STRING | Human-facing report title (shown in the tab; recorded in audit log). |
-| `source_query` | STRING | The full `SELECT` the report reads (a single statement; no trailing `;`). The app wraps it as a subquery: `SELECT <cols> FROM ( <source_query> ) AS _q [WHERE …] [ORDER BY …]`. Can be a plain `SELECT * FROM catalog.schema.table` or an arbitrary join/aggregate. |
-| `date_field` | STRING | **Optional.** Column name for the date scope (must exist in the query result; a TIMESTAMP/DATE). When set, a date selector is shown and the query is scoped to the picked date. **NULL/empty → no date selector; all rows/dates show.** |
-| `columns_json` | STRING | **Optional.** JSON array of `{"name", "label", "format"}` objects (see below). **Empty `[]` or NULL → every column the query returns is shown** (labelled by its own name, `text` format). When set, only the configured columns show, in configured order. |
-| `filters_json` | STRING | JSON array of `{"field", "label"}` objects (see below). May be empty `[]` or NULL (→ no filter dropdowns). |
+| `kind` | STRING | `query` (default) or `volume`. Selects the report type below. |
+| `source_query` | STRING | **Query reports:** a full single-statement `SELECT` (wrapped as `FROM ( … ) AS _q`). NULL for volume reports. (Replaces the retired `source_fqn`.) |
+| `volume_root` | STRING | **Volume reports:** pinned UC Volume root, e.g. `/Volumes/<catalog>/<schema>/<volume>`. NULL for query reports. |
+| `date_field` | STRING | Optional column name for the date scope (must be TIMESTAMP/DATE; bare identifier). |
+| `columns_json` | STRING | JSON array of column objects (see below). Empty/NULL → show all query columns. |
+| `filters_json` | STRING | JSON array of `{"field", "label"}` objects (see below). May be empty `[]` or NULL. |
 | `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab, 2 = second, etc.). |
 | `enabled` | BOOLEAN | Whether the report is active (only `true` rows are shown). |
-| `download_group` | STRING | Optional explicit per-report download group. If NULL, it is **derived** from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`). Set to a Databricks group name to override. |
-| `view_key` | STRING | The view (tab set) this report belongs to — also the Databricks group granting view access. References `report_view.view_key`. |
-| `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (row last modified; admin console stamps the editor's email). |
+| `download_group` | STRING | Optional per-report download group. If NULL, derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`). |
+| `view_key` | STRING | Databricks group granting VIEW access (also names the report's view/tab). |
+| `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (admin console stamps the editor's email). |
 
 ### `columns_json` format
 
@@ -120,13 +104,16 @@ A JSON array of column descriptors:
 ```
 
 Each object has:
-- **`name`** (STRING, required) — source column name (bare SQL identifier). Must be a column returned by `source_query`.
+- **`name`** (STRING, required) — source column name (bare SQL identifier). Must be selectable from `source_query`.
 - **`label`** (STRING, required) — display header and export column header.
 - **`format`** (STRING, optional, default `"text"`) — display format hint:
   - `"text"` — render as-is (raw string)
   - `"int"` — thousands-separated count (e.g., `1,234,567`; Excel formatted as number)
+  - `"float"` — thousands-separated fixed-decimal number (e.g., `1,234,567.50`); `"double"` is an alias
   - `"pct"` — signed one-decimal percentage (e.g., `+12.5%`, `-3.2%`; NULL → `—`)
   - Unknown values treated as `"text"`
+
+An aggregated column instead carries `{"agg": "sum|min|avg|max|first|last", "source": "<col>", "label": ..., "format": ...}` — the app emits `AGG(source) AS alias` with a join-safe `GROUP BY` over the non-aggregated columns. See [REPORTS.md](REPORTS.md#aggregated-columns).
 
 ### `filters_json` format
 
@@ -140,14 +127,14 @@ A JSON array of filter descriptors:
 ```
 
 Each object has:
-- **`field`** (STRING, required) — column name to filter on (bare SQL identifier). **Must be a column returned by `source_query`.** If the column doesn't exist, the OBO read will fail.
+- **`field`** (STRING, required) — source column name to filter on (bare SQL identifier). **Must be selectable from `source_query`.** If the column doesn't exist, the OBO read will fail.
 - **`label`** (STRING, required) — dropdown label shown on the UI.
 
-**Important:** Every filter field MUST be a column the query returns. When `columns_json` is configured, the per-user snapshot SELECT projects `display_columns ∪ filter_fields`; when it is empty the snapshot projects `*`, so any returned column is filterable.
+**Important:** Every filter field MUST be projectable (i.e., it must exist as a real column on the source table). The per-user snapshot SELECT projects `display_columns ∪ filter_fields`, so a missing field breaks the query.
 
 ### Identifier allowlist
 
-Every identifier (column name, filter field, `order_by`) must match the regex:
+Every identifier (column name, filter field, `order_by`, `source`)  must match the regex:
 ```
 ^[A-Za-z_][A-Za-z0-9_]*$
 ```
@@ -155,7 +142,7 @@ Every identifier (column name, filter field, `order_by`) must match the regex:
 Valid: `my_col`, `Col1`, `_internal`, `date`
 Invalid: `my-col`, `123col`, `.col`, `col.name`
 
-Bad identifiers raise `ValueError` at query-build time, not runtime. The `source_query` itself is admin-authored SQL: it is validated to be a single statement (no embedded `;`) and wrapped as a subquery, but its inner text is not otherwise parsed — treat write access to `report_config` as trusted.
+Bad identifiers raise `ValueError` at query-build time, not runtime.
 
 ---
 
@@ -171,20 +158,22 @@ new_rows_df = spark.createDataFrame(
         (
             "my_report",
             "My Report",
-            "SELECT * FROM main.default.my_table",  # source_query (a full SELECT)
-            "report_date",                          # date_field (or None for no date scope)
+            "SELECT * FROM main.default.my_table",
+            "report_date",
             '[{"name":"col1","label":"Column 1"},{"name":"col2","label":"Count","format":"int"}]',
             '[{"field":"region","label":"Region"}]',
             "col1",
             1,
             True,
             None,
+            "my_view_group",
             datetime.now()
         )
     ],
     schema="report_id STRING, title STRING, source_query STRING, date_field STRING, "
            "columns_json STRING, filters_json STRING, order_by STRING, "
-           "display_order INT, enabled BOOLEAN, download_group STRING, updated_at TIMESTAMP"
+           "display_order INT, enabled BOOLEAN, download_group STRING, view_key STRING, "
+           "updated_at TIMESTAMP"
 )
 
 DeltaTable.forName(spark, f"{APP_CATALOG}.{APP_SCHEMA}.report_config").alias("t").merge(
@@ -230,18 +219,23 @@ SET download_group = 'my_custom_group'
 WHERE report_id = 'my_report';
 ```
 
-When `download_group` is set (non-NULL, non-empty after stripping), the effective download group for that report is the value. Otherwise, it falls back to the code default (`download_hub_download_users`).
+When `download_group` is set (non-NULL, non-empty after stripping), the effective download group for that report is the value. Otherwise, it is derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`).
 
 ---
 
 ## Worked example: a simple financial report
 
+Name the columns explicitly (the table has additional columns like `kind`, `volume_root`, and `view_key`, so a positional `VALUES (…)` is fragile):
+
 ```sql
-INSERT INTO main.default.report_config VALUES (
+INSERT INTO main.default.report_config
+  (report_id, title, source_query, date_field, columns_json, filters_json,
+   order_by, display_order, enabled, download_group, view_key, updated_at)
+VALUES (
   'monthly_budget',                                       -- report_id
   'Monthly Budget Execution',                            -- title
   'SELECT * FROM main.finance.budget_summary',           -- source_query (a full SELECT)
-  'month_end',                                           -- date_field (a column the query returns; NULL for none)
+  'month_end',                                           -- date_field (column the query returns)
   '[
     {"name":"department","label":"Department","format":"text"},
     {"name":"budget_amt","label":"Budget","format":"int"},
@@ -256,6 +250,7 @@ INSERT INTO main.default.report_config VALUES (
   2,                                                     -- display_order (second tab)
   true,                                                  -- enabled
   'finance_budget_viewers',                              -- download_group (gate to this group)
+  'finance_report_viewers',                              -- view_key (group granting view access)
   current_timestamp()                                    -- updated_at
 );
 ```
@@ -276,7 +271,7 @@ The app will:
 The app enforces strict injection safety:
 
 - **VALUES** (date, filter selections) are ALWAYS bound as `:named` parameters in the Statement Execution API — never interpolated.
-- **IDENTIFIERS** (column names, filter fields, `order_by`) come from config and are validated against the allowlist regex (`^[A-Za-z_][A-Za-z0-9_]*$`) at query-build time — bad identifiers raise `ValueError` immediately. The `source_query` is validated to be a single statement and wrapped as a subquery.
+- **IDENTIFIERS** (column names, filter fields, `order_by`, aggregate `source`) come from config and are validated against the allowlist regex (`^[A-Za-z_][A-Za-z0-9_]*$`) at query-build time — bad identifiers raise `ValueError` immediately.
 
 This means:
 - Bad SQL injection on filter values is impossible (bound parameters)

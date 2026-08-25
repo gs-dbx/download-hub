@@ -6,7 +6,14 @@ The app is a **config-driven multi-report portal**. Every tab, its columns, its 
 
 - The app reads `report_config` **as the app service principal** (not as the user) and TTL-caches the parsed rows in-process for ~300 seconds. A newly MERGE'd or edited row therefore appears within ~5 minutes without a redeploy (restart the app to pick it up immediately).
 - Only rows with `enabled = true` are shown; they are ordered by `display_order`.
-- The report's **data** is still read **as the signed-in user (OBO)** — Unity Catalog enforces the user's own SELECT on whatever the `source_query` reads. The registry read and the data read are separate identities.
+- The report's **data** is still read **as the signed-in user (OBO)** — Unity Catalog enforces the user's own access (SELECT on the `source_query`'s tables for a query report; READ VOLUME on the `volume_root` for a volume report). The registry read and the data read are separate identities.
+
+## Report kinds: `query` vs `volume`
+
+A report is one of two **kinds** (the `kind` column; default `query`):
+
+- **`query`** — the report runs a SQL `SELECT` (`source_query`) and renders the rows as a filterable, sortable, downloadable table.
+- **`volume`** — the report browses a single pinned **Unity Catalog Volume** root (`volume_root`): folders first, then files, with breadcrumb traversal into subfolders. Metadata + gated download only (no inline preview). Listing and downloads run **as the signed-in user (OBO)**, so UC `READ VOLUME` grants enforce per-user; downloads use the same acknowledgement + justification + audit-first flow as query reports. Served by `GET /volume/{report_id}/list?path=<root-relative>` (folder fragment) and `POST /volume/{report_id}/download`.
 
 ## Row shape
 
@@ -14,19 +21,22 @@ The app is a **config-driven multi-report portal**. Every tab, its columns, its 
 | --- | --- | --- |
 | `report_id` | STRING | Stable registry key (a bare identifier, e.g. `daily_metrics`). The MERGE key. |
 | `title` | STRING | Human-facing tab/report title. Recorded in the audit row. |
-| `source_query` | STRING | The full `SELECT` the report reads (a single statement; wrapped as a subquery `FROM ( … ) AS _q`). |
-| `date_field` | STRING | Optional date/timestamp column to scope by (drives the date selector). `NULL`/empty → no date selector; all rows show. |
-| `columns_json` | STRING | JSON array of display columns (see below). Empty/`NULL` → show every column the query returns. |
+| `kind` | STRING | `query` (default) or `volume`. |
+| `source_query` | STRING | **Query reports:** a full single-statement `SELECT` the app wraps as `FROM ( … ) AS _q` and layers date scope / filters / ORDER BY on. `NULL` for volume reports. |
+| `volume_root` | STRING | **Volume reports:** the pinned root path (`/Volumes/<catalog>/<schema>/<volume>[/subpath]`); users browse it and its subfolders, jailed to the root. `NULL` for query reports. |
+| `date_field` | STRING | The date/timestamp column a query report is scoped by (drives the date selector). Optional. |
+| `columns_json` | STRING | JSON array of display columns (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of filter dropdowns (may be empty/omitted). |
 | `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab). |
 | `enabled` | BOOLEAN | Whether the report is active. |
-| `download_group` | STRING | Optional per-report download group (`NULL` → code default). |
-| `updated_at` | TIMESTAMP | Bookkeeping. |
+| `download_group` | STRING | Optional per-report download group (`NULL` → derived from `view_key` + suffix). |
+| `view_key` | STRING | The Databricks group that grants VIEW access to the report (also names its view/tab). |
+| `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (the admin console stamps the editor's email). |
 
 ### `columns_json`
 
-A JSON array of `{"name", "label", "format"}` objects:
+A JSON array of column objects (query reports). Empty/omitted → every column the query returns is shown.
 
 ```json
 [
@@ -39,8 +49,28 @@ A JSON array of `{"name", "label", "format"}` objects:
 - `name` — the source column (a bare SQL identifier).
 - `label` — the header shown on screen and used as the export header.
 - `format` — one of `int` (thousands-separated count; numeric in Excel),
+  `float` (thousands-separated fixed-decimal number; `double` is an alias),
   `pct` (signed one-decimal percentage; `—` when NULL), or `text` (raw string).
   Unknown values are tolerated and treated as `text`.
+
+#### Aggregated columns
+
+A column may apply an aggregation function to a source column. The app injects it
+as `AGG(source) AS alias` and adds a **join-safe `GROUP BY`** over every
+non-aggregated selected/filtered column:
+
+```json
+[
+  {"name": "channel", "label": "Channel", "format": "text"},
+  {"agg": "sum", "source": "revenue", "label": "Total Revenue", "format": "float"}
+]
+```
+
+- `agg` — one of `sum`, `min`, `avg`, `max`, `first`, `last`.
+- `source` — the column the function reads. The output alias is `name` when given, else derived as `{source}_{agg}`.
+- Every non-aggregated display/filter column is grouped (no bare ungrouped column is emitted). `first`/`last` are non-deterministic without an `order_by`.
+
+The admin console's column builder exposes an **Agg** dropdown per column that serializes into this shape.
 
 ### `filters_json`
 
@@ -51,13 +81,33 @@ A JSON array of `{"field", "label"}` objects:
 ```
 
 Each filter renders a dropdown whose options are the distinct values of `field`
-in the current date's snapshot; it defaults to the first distinct value.
+in the current snapshot; every filter has an "All" option (no constraint).
 
-> **The filter `field` must be a column the query returns.** When `columns_json`
-> is set, the per-user snapshot selects `display columns ∪ filter fields`, so a
-> filter field that is not returned by `source_query` will break the read. When
-> `columns_json` is empty the snapshot selects `*`, so any returned column is
-> filterable. Filter fields do not need to appear in `columns_json`.
+> **The filter `field` must be projectable.** The per-user snapshot selects
+> `display columns ∪ filter fields`, so a filter field that is not a real column
+> the `source_query` returns will break the read. Filter fields do not need to
+> appear in `columns_json`, but they must be selectable from the query.
+
+## Configuring a volume report
+
+Set `kind = 'volume'` and `volume_root` to a single pinned UC Volume path; leave
+`source_query`, `date_field`, `columns_json`, and `filters_json` NULL/empty:
+
+```sql
+MERGE INTO <catalog>.<schema>.report_config t
+USING (SELECT 'sample_docs' AS report_id) s ON t.report_id = s.report_id
+WHEN NOT MATCHED THEN INSERT
+  (report_id, title, kind, volume_root, display_order, enabled, view_key,
+   updated_at, updated_by)
+VALUES
+  ('sample_docs', 'Sample Documents', 'volume',
+   '/Volumes/<catalog>/<schema>/sample_docs', 2, true, '<view_group>',
+   current_timestamp(), 'seed');
+```
+
+Users who are members of `view_key` (or its download group) see the report; they
+browse folders/subfolders under the root (jailed to it) and download individual
+files. Grant the groups `READ VOLUME` on the root — see [PERMISSIONS.md](PERMISSIONS.md).
 
 ## Adding or updating a report
 
@@ -73,6 +123,20 @@ DeltaTable.forName(spark, f"{schema_fqn}.report_config").alias("t").merge(
 
 Enable/disable a report by toggling `enabled`; reorder tabs via `display_order`.
 
+### Admin console
+
+Members of the admin group (env `ADMIN_GROUP`) get an `/admin` console to manage
+the registry without touching the notebook:
+
+- **Add / edit** a report via a query-preview + column-builder (pick columns, set
+  labels/formats, choose an **Agg** function per column, mark filters).
+- **Delete** a report (`POST /admin/report/delete`; confirmed, SP write, audited).
+- A **Back to reports** link returns to the report pages.
+
+On each query report's page, a **View SQL** disclosure shows the exact
+`source_query` being run (accessible, copyable) so users can see what produced the
+table.
+
 ## Download applies to every report
 
 Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** (all matching rows, no pagination) from the per-user cache, with the data-handling disclaimer at the top of the file.
@@ -85,10 +149,8 @@ Download is generic: any report gets a group-gated download that exports the **c
 
 - **VALUES** (the selected date and filter selections) are ALWAYS bound as
   `:named` Statement Execution parameters — never interpolated into SQL.
-- **IDENTIFIERS** (column names, filter fields, `order_by`) come from
-  admin-authored config and cannot be bound, so each is validated against a
-  strict allowlist (`^[A-Za-z_][A-Za-z0-9_]*$`) at query-build time; a bad
-  identifier raises `ValueError` rather than reaching the warehouse.
-- The **`source_query`** is admin-authored SQL, validated to be a single
-  statement (no embedded `;`) and wrapped as a subquery. Treat write access to
-  `report_config` as trusted.
+- **IDENTIFIERS** (column names, filter fields, `order_by`, each dotted part of
+  `source_fqn`) come from admin-authored config and cannot be bound, so each is
+  validated against a strict allowlist (`^[A-Za-z_][A-Za-z0-9_]*$`) at
+  query-build time; a bad identifier raises `ValueError` rather than reaching the
+  warehouse.

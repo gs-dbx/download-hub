@@ -1,1 +1,1 @@
-"""sample_report — pure synthetic-data generation for daily metrics gold table."""
+"""efile_glance — pure synthetic-data generation for the Daily E-File at a Glance gold table."""

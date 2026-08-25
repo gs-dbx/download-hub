@@ -14,27 +14,36 @@
   /static/js/admin.js via the data-role/data-tab hooks below.
 #}
 <div class="app-admin" data-dl-suffix="{{ dl_suffix }}">
+  <p class="app-back">
+    <a class="usa-button usa-button--outline usa-button--small" href="/">
+      <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#arrow_back"></use>
+      </svg>
+      Back to resources
+    </a>
+  </p>
   <div class="app-hero">
     <h1 class="font-heading-xl app-hero__title">Administration</h1>
     <p class="usa-intro font-body-sm app-hero__sub">
-      Manage views, reports, the download disclaimer, and review the audit log. Changes take effect immediately.
+      Manage views, resources, the download disclaimer, and review the audit log. Changes take effect immediately.
     </p>
   </div>
 
   <nav class="app-admintabs" aria-label="Admin sections">
-    <button type="button" class="app-admintab app-admintab--active" data-tab="views">Report Views</button>
-    <button type="button" class="app-admintab" data-tab="reports">Reports</button>
+    <button type="button" class="app-admintab app-admintab--active" data-tab="views">Views</button>
+    <button type="button" class="app-admintab" data-tab="reports">Resources</button>
     <button type="button" class="app-admintab" data-tab="config">System Config</button>
+    <button type="button" class="app-admintab" data-tab="changes">Change log</button>
     <button type="button" class="app-admintab" data-tab="audit">Audit Log</button>
   </nav>
 
   {# =============================================================== Views #}
   <section class="app-admin__panel" data-panel="views">
-    <h2 class="font-heading-lg">Report views</h2>
+    <h2 class="font-heading-lg">Views</h2>
     <p class="font-body-sm text-base measure-5">
-      A <strong>view</strong> is a set of report tabs. Its <strong>key</strong> is the Databricks group that
+      A <strong>view</strong> is a set of resource tabs. Its <strong>key</strong> is the Databricks group that
       grants access; its <strong>title</strong> shows in the view switcher. The download group is derived as
-      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a report overrides it.
+      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a resource overrides it.
     </p>
 
     <div class="app-tablewrap">
@@ -50,10 +59,19 @@
             <td>{{ v.display_order }}</td>
             <td>{{ "Yes" if v.enabled else "No" }}</td>
             <td>
-              <button type="button" class="usa-button usa-button--outline usa-button--small"
-                      data-role="view-edit"
-                      data-view-key="{{ v.view_key }}" data-title="{{ v.title }}"
-                      data-order="{{ v.display_order }}" data-enabled="{{ 'true' if v.enabled else 'false' }}">Edit</button>
+              <div class="app-row-actions">
+                <button type="button" class="usa-button usa-button--outline usa-button--small"
+                        data-role="view-edit"
+                        data-view-key="{{ v.view_key }}" data-title="{{ v.title }}"
+                        data-order="{{ v.display_order }}" data-enabled="{{ 'true' if v.enabled else 'false' }}">Edit</button>
+                {# Delete is a self-contained POST (works without admin.js): native
+                   confirm guards the destructive action. Route redirects to /admin. #}
+                <form method="post" action="/admin/view/delete" class="app-inline-form"
+                      onsubmit="return confirm('Delete view {{ v.view_key }}? This removes it from the registry and cannot be undone.');">
+                  <input type="hidden" name="view_key" value="{{ v.view_key }}">
+                  <button type="submit" class="usa-button usa-button--secondary usa-button--small">Delete</button>
+                </form>
+              </div>
             </td>
           </tr>
           {% else %}
@@ -95,46 +113,57 @@
 
   {# ============================================================= Reports #}
   <section class="app-admin__panel" data-panel="reports" hidden>
-    <h2 class="font-heading-lg">Reports</h2>
+    <h2 class="font-heading-lg">Resources</h2>
 
     <div class="app-tablewrap">
       <table class="usa-table usa-table--striped usa-table--borderless width-full">
         <thead>
-          <tr><th scope="col">Report</th><th scope="col">View</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
+          <tr><th scope="col">Resource</th><th scope="col">Type</th><th scope="col">View</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {% for r in reports %}
           <tr>
             <th scope="row">{{ r.title }} <span class="text-base font-body-3xs">({{ r.report_id }})</span></th>
+            <td><span class="usa-tag">{{ r.kind or "query" }}</span></td>
             <td>{{ r.view_key }}</td>
             <td>{{ r.display_order }}</td>
             <td>{{ "Yes" if r.enabled else "No" }}</td>
             <td>
-              <button type="button" class="usa-button usa-button--outline usa-button--small"
-                      data-role="report-edit"
-                      data-report-id="{{ r.report_id }}" data-title="{{ r.title }}"
-                      data-source-query="{{ r.source_query }}" data-date-field="{{ r.date_field }}"
-                      data-order-by="{{ r.order_by }}" data-display-order="{{ r.display_order }}"
-                      data-enabled="{{ 'true' if r.enabled else 'false' }}"
-                      data-download-group="{{ r.download_group }}" data-view-key="{{ r.view_key }}"
-                      data-columns-json="{{ r.columns_json }}" data-filters-json="{{ r.filters_json }}">Edit</button>
+              <div class="app-row-actions">
+                <button type="button" class="usa-button usa-button--outline usa-button--small"
+                        data-role="report-edit"
+                        data-report-id="{{ r.report_id }}" data-title="{{ r.title }}"
+                        data-kind="{{ r.kind or 'query' }}" data-volume-root="{{ r.volume_root }}"
+                        data-source-query="{{ r.source_query }}" data-date-field="{{ r.date_field }}"
+                        data-order-by="{{ r.order_by }}" data-display-order="{{ r.display_order }}"
+                        data-enabled="{{ 'true' if r.enabled else 'false' }}"
+                        data-download-group="{{ r.download_group }}" data-view-key="{{ r.view_key }}"
+                        data-columns-json="{{ r.columns_json }}" data-filters-json="{{ r.filters_json }}">Edit</button>
+                {# Delete is a self-contained POST (works without admin.js): native
+                   confirm guards the destructive action. Route redirects to /admin. #}
+                <form method="post" action="/admin/report/delete" class="app-inline-form"
+                      onsubmit="return confirm('Delete resource {{ r.report_id }}? This removes it from the registry and cannot be undone.');">
+                  <input type="hidden" name="report_id" value="{{ r.report_id }}">
+                  <button type="submit" class="usa-button usa-button--secondary usa-button--small">Delete</button>
+                </form>
+              </div>
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5">No reports defined yet.</td></tr>
+          <tr><td colspan="6">No resources defined yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
 
-    <h3 class="font-heading-sm margin-top-3">Add / edit a report</h3>
+    <h3 class="font-heading-sm margin-top-3">Add / edit a resource</h3>
     <form class="usa-form" id="report-form" data-role="report-form">
       <div class="app-formgrid">
         <div class="app-field">
-          <label class="usa-label" for="r-report-id">Report ID</label>
+          <label class="usa-label" for="r-report-id">Resource ID</label>
           <input class="usa-input" id="r-report-id" name="report_id" required
                  pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
-          <span class="usa-hint">Stable key; reusing an ID edits that report.</span>
+          <span class="usa-hint">Stable key; reusing an ID edits that resource.</span>
         </div>
         <div class="app-field">
           <label class="usa-label" for="r-title">Title</label>
@@ -149,8 +178,27 @@
             {% endfor %}
           </select>
         </div>
+        <div class="app-field app-field--narrow">
+          <label class="usa-label" for="r-kind">Resource type</label>
+          <select class="usa-select" id="r-kind" name="kind" data-role="report-kind">
+            <option value="query">Query (SQL)</option>
+            <option value="volume">Volume (browse files)</option>
+          </select>
+          <span class="usa-hint">Query = a SELECT; Volume = browse + download files from a UC volume.</span>
+        </div>
       </div>
 
+      {# Volume field — shown by admin.js only when Resource type = Volume. #}
+      <div class="app-field" data-role="volume-section" hidden>
+        <label class="usa-label" for="r-volume-root">Resource name/ID</label>
+        <input class="usa-input" id="r-volume-root" name="volume_root"
+               data-role="volume-root" autocomplete="off"
+               placeholder="/Volumes/catalog/schema/volume">
+        <span class="usa-hint">The UC volume path to expose. Users browse this folder and its subfolders (metadata + gated download). Members need READ VOLUME on it.</span>
+      </div>
+
+      {# Query builder — hidden by admin.js when Resource type = Volume. #}
+      <div data-role="query-section">
       <div class="app-field">
         <label class="usa-label" for="r-query">Source query (a single SELECT)</label>
         <textarea class="usa-textarea" id="r-query" name="source_query" rows="4"
@@ -170,12 +218,13 @@
         <div class="app-tablewrap">
           <table class="usa-table usa-table--compact usa-table--borderless width-full" data-role="columns-table">
             <thead>
-              <tr><th scope="col">Show</th><th scope="col">Column</th><th scope="col">Label</th><th scope="col">Format</th><th scope="col">Filter</th></tr>
+              <tr><th scope="col">Show</th><th scope="col">Column</th><th scope="col">Label</th><th scope="col">Format</th><th scope="col">Agg</th><th scope="col">Filter</th></tr>
             </thead>
             <tbody data-role="columns-body"></tbody>
           </table>
         </div>
       </div>
+      </div>{# /query-section #}
 
       <div class="app-formgrid">
         <div class="app-field">
@@ -211,7 +260,7 @@
       <input type="hidden" name="filters_json" data-role="filters-json" value="[]">
 
       <div class="app-formactions">
-        <button class="usa-button" type="submit">Save report</button>
+        <button class="usa-button" type="submit">Save resource</button>
         <button type="button" class="usa-button usa-button--outline" data-role="report-reset">New / clear</button>
         <span class="app-admin__status" data-role="report-status" role="status"></span>
       </div>
@@ -223,7 +272,7 @@
     <h2 class="font-heading-lg">System configuration</h2>
     <p class="font-body-sm text-base measure-5">
       The <strong>download disclaimer</strong> is shown in the download dialog and embedded at the top of every
-      exported file. It is stored in the <code>app_config</code> table and applies to all reports.
+      exported file. It is stored in the <code>app_config</code> table and applies to all resources.
     </p>
     <form class="usa-form usa-form--large" id="config-form" data-role="config-form">
       <div class="app-field">
@@ -236,6 +285,46 @@
         <span class="app-admin__status" data-role="config-status" role="status"></span>
       </div>
     </form>
+  </section>
+
+  {# ============================================================= Change log #}
+  <section class="app-admin__panel" data-panel="changes" hidden>
+    <h2 class="font-heading-lg">Change log</h2>
+    <p class="font-body-sm text-base">Admin mutations (resources, views, config) over the last 30 days.</p>
+
+    {# Analytics summary #}
+    {% if config_audit_analytics %}
+    <h3 class="font-heading-sm margin-top-3">Recent activity summary</h3>
+    <div class="app-tablewrap">
+      <table class="usa-table usa-table--striped usa-table--borderless usa-table--compact width-full">
+        <thead>
+          <tr><th scope="col">Entity type</th><th scope="col">Action</th><th scope="col">Count</th></tr>
+        </thead>
+        <tbody>
+          {% for row in config_audit_analytics %}
+          <tr><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {# Recent changes #}
+    <h3 class="font-heading-sm margin-top-3">Recent changes (newest first)</h3>
+    <div class="app-tablewrap">
+      <table class="usa-table usa-table--striped usa-table--borderless usa-table--compact width-full">
+        <thead>
+          <tr>{% for c in config_audit_columns %}<th scope="col">{{ c }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in config_audit_rows %}
+          <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          {% else %}
+          <tr><td colspan="{{ config_audit_columns|length }}">No admin mutations recorded yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 
   {# ============================================================ Audit Log #}

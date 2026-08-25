@@ -20,7 +20,19 @@ from app.auth import (
     group_display_names,
     is_admin,
     is_member,
+    parse_scim_user_id,
 )
+
+
+def test_parse_scim_user_id_matches_raw_forwarded_id():
+    """A numeric <user_id>@<workspace_id> yields the leading user_id."""
+    assert parse_scim_user_id("1234567890@9876543210") == "1234567890"
+
+
+def test_parse_scim_user_id_passthrough_for_emails_and_blank():
+    """A real email/name (or blank) is not a SCIM id — returns None."""
+    for v in ("alice@example.gov", "Alice Smith", "", "12345", "12345@abc", "@123"):
+        assert parse_scim_user_id(v) is None, v
 
 
 def _report(**kw):

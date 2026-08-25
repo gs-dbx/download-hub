@@ -5,9 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/uswds/css/uswds.min.css">
-  <!-- Local color overlay — MUST load AFTER uswds.min.css to win overlaps.
-       ?v=asset_version cache-busts the sheet on every app version bump. -->
-  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
+  <!-- Local color overlay — MUST load AFTER uswds.min.css to win overlaps. -->
+  <link rel="stylesheet" href="/static/css/app.css">
   <script src="/static/uswds/js/uswds-init.min.js"></script>
 </head>
 <body>
@@ -36,6 +35,13 @@
     <div class="app-header__inner">
       <img class="app-header__logo" src="{{ app_logo }}" alt="{{ app_org_name }}">
       <span class="app-header__app">{{ app_name }}</span>
+      {# Live SQL-warehouse status; app.js polls /health/warehouse. Serverless
+         warehouses auto-suspend, so a cold start adds latency — this tells the
+         user whether the first query will be slow. #}
+      <span class="app-whstatus" data-role="wh-badge" title="SQL warehouse status">
+        <span class="app-whstatus__dot" data-role="wh-dot"></span>
+        <span class="app-whstatus__text" data-role="wh-text">Checking warehouse…</span>
+      </span>
     </div>
   </header>
 
@@ -93,8 +99,16 @@
     </div>
   </footer>
 
+  {# Full-page overlay shown on internal navigation — server renders can wait on
+     a cold warehouse, so a click gives immediate feedback. app.js reveals it. #}
+  <div class="app-navoverlay" data-role="nav-overlay" hidden aria-hidden="true">
+    <span class="app-spinner__dot" role="status" aria-label="Loading"></span>
+  </div>
+
   <script src="/static/uswds/js/uswds.min.js" defer></script>
-  <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/app.js" defer></script>
+  {# Page-specific scripts (e.g. admin.js on /admin). Without this block the
+     admin console's tabs + column builder never load. #}
   {% block scripts_extra %}{% endblock %}
 </body>
 </html>

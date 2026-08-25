@@ -14,6 +14,7 @@ from app.cache import (
     distinct_values,
     make_key,
     paginate,
+    sort_rows,
 )
 
 
@@ -96,28 +97,28 @@ def test_cache_evict_removes():
 
 
 _FILTER_ROWS = [
-    {"channel": "ALL", "region": "NE", "metric_name": "X"},
-    {"channel": "E", "region": "NE", "metric_name": "Y"},
-    {"channel": "E", "region": "SW", "metric_name": "Z"},
+    {"drain": "ALL", "region": "NE", "metric_name": "X"},
+    {"drain": "E", "region": "NE", "metric_name": "Y"},
+    {"drain": "E", "region": "SW", "metric_name": "Z"},
 ]
 
 
 def test_apply_filters_equality_and_across_two_fields():
     """Two non-empty filters compose with AND."""
-    out = apply_filters(_FILTER_ROWS, {"channel": "E", "region": "NE"})
+    out = apply_filters(_FILTER_ROWS, {"drain": "E", "region": "NE"})
     assert len(out) == 1
     assert out[0]["metric_name"] == "Y"
 
 
 def test_apply_filters_empty_value_is_no_constraint():
     """An empty-string value places no constraint on that field."""
-    out = apply_filters(_FILTER_ROWS, {"channel": "", "region": "NE"})
+    out = apply_filters(_FILTER_ROWS, {"drain": "", "region": "NE"})
     assert {r["metric_name"] for r in out} == {"X", "Y"}
 
 
 def test_apply_filters_all_empty_returns_all():
     """All-empty filters return every row."""
-    out = apply_filters(_FILTER_ROWS, {"channel": "", "region": ""})
+    out = apply_filters(_FILTER_ROWS, {"drain": "", "region": ""})
     assert len(out) == len(_FILTER_ROWS)
 
 
@@ -160,13 +161,13 @@ def test_apply_search_empty_query_returns_all():
 def test_distinct_values_sorted_dedup_null_skip():
     """Distinct values are sorted, de-duplicated, and skip None/absent."""
     rows = [
-        {"channel": "E"},
-        {"channel": "ALL"},
-        {"channel": "E"},
-        {"channel": None},
+        {"drain": "E"},
+        {"drain": "ALL"},
+        {"drain": "E"},
+        {"drain": None},
         {},  # absent field
     ]
-    assert distinct_values(rows, "channel") == ["ALL", "E"]
+    assert distinct_values(rows, "drain") == ["ALL", "E"]
 
 
 # --- paginate ------------------------------------------------------------
@@ -200,3 +201,59 @@ def test_paginate_size_zero_is_all():
     rows, total, pages = paginate(list(range(5)), 1, 0)
     assert rows == list(range(5))
     assert pages == 1
+
+
+# --- sort_rows -----------------------------------------------------------
+
+
+def test_sort_rows_empty_key_is_noop():
+    """A falsey key returns the rows unchanged (server default order)."""
+    rows = [{"a": "2"}, {"a": "1"}]
+    assert sort_rows(rows, "") is rows
+
+
+def test_sort_rows_text_asc_desc():
+    """Text sort is case-insensitive; desc reverses."""
+    rows = [{"n": "Banana"}, {"n": "apple"}, {"n": "Cherry"}]
+    assert [r["n"] for r in sort_rows(rows, "n")] == ["apple", "Banana", "Cherry"]
+    assert [r["n"] for r in sort_rows(rows, "n", "desc")] == [
+        "Cherry",
+        "Banana",
+        "apple",
+    ]
+
+
+def test_sort_rows_numeric_orders_by_value_not_lexically():
+    """Numeric sort parses values so 9 < 10 (not lexical '10' < '9')."""
+    rows = [{"v": "10"}, {"v": "9"}, {"v": "100"}]
+    assert [r["v"] for r in sort_rows(rows, "v", "asc", numeric=True)] == [
+        "9",
+        "10",
+        "100",
+    ]
+
+
+def test_sort_rows_missing_values_always_last():
+    """None/blank values sort last regardless of direction."""
+    rows = [{"v": "2"}, {"v": None}, {"v": "1"}, {"v": ""}]
+    asc = sort_rows(rows, "v", "asc", numeric=True)
+    assert [r["v"] for r in asc[:2]] == ["1", "2"]
+    assert asc[2]["v"] in (None, "")
+    assert asc[3]["v"] in (None, "")
+    desc = sort_rows(rows, "v", "desc", numeric=True)
+    assert [r["v"] for r in desc[:2]] == ["2", "1"]
+    assert desc[2]["v"] in (None, "")
+
+
+def test_sort_rows_numeric_nonnumeric_is_zero():
+    """A non-numeric value in a numeric sort compares as 0.0 (no crash)."""
+    rows = [{"v": "5"}, {"v": "abc"}, {"v": "-3"}]
+    out = sort_rows(rows, "v", "asc", numeric=True)
+    assert [r["v"] for r in out] == ["-3", "abc", "5"]
+
+
+def test_sort_rows_is_stable():
+    """Equal keys keep prior order (stable sort)."""
+    rows = [{"k": "a", "i": 0}, {"k": "a", "i": 1}, {"k": "a", "i": 2}]
+    assert [r["i"] for r in sort_rows(rows, "k")] == [0, 1, 2]
+

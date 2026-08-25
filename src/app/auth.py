@@ -11,6 +11,7 @@ raised (no CLI profile, no mock data).
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # typing only — auth never runtime-imports reports (no cycle)
@@ -18,6 +19,32 @@ if TYPE_CHECKING:  # typing only — auth never runtime-imports reports (no cycl
 
 USER_TOKEN_HEADER: str = "x-forwarded-access-token"
 USER_EMAIL_HEADER: str = "x-forwarded-user"
+
+# On some workspaces (e.g. GovCloud) X-Forwarded-User is a numeric SCIM identity
+# "<user_id>@<workspace_id>" rather than an email; the leading user_id can be
+# resolved to an email via SCIM for display.
+_SCIM_ID_RE = re.compile(r"^(\d+)@\d+$")
+
+
+def parse_scim_user_id(value: str) -> str | None:
+    """Return the numeric SCIM user_id when ``value`` is a raw forwarded id.
+
+    A stored identity of the form ``"<user_id>@<workspace_id>"`` (both numeric)
+    is the raw ``X-Forwarded-User`` header, not an email; this returns its
+    leading ``user_id`` so the caller can resolve it to an email. Any real
+    email/display name (or empty) returns ``None`` (nothing to resolve).
+
+    Args:
+        value: The stored identity string.
+
+    Returns:
+        The numeric ``user_id`` string, or ``None`` when ``value`` is not a raw
+        SCIM id.
+    """
+    if not value:
+        return None
+    m = _SCIM_ID_RE.match(value)
+    return m.group(1) if m else None
 
 # Generic default Databricks group used as the ultimate fallback for a report's
 # view group when it has neither a ``view_key`` nor an explicit

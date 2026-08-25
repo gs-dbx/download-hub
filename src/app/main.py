@@ -56,6 +56,7 @@ from auth import (
     parse_scim_user_id,
 )
 from cache import (
+    BoundedTTLCache,
     Snapshot,
     SnapshotCache,
     apply_filters,
@@ -604,8 +605,9 @@ def _readable_email(me_user, header_email: str) -> str:
 # Resolve a stored raw forwarded numeric SCIM id ("<user_id>@<workspace_id>") to
 # the user's email for display (see auth.parse_scim_user_id). Anything else (a
 # real email/name) passes through unchanged. Cached per user_id with a TTL.
-_email_display_cache: dict[str, tuple[float, str]] = {}
-_EMAIL_DISPLAY_TTL = 3600.0
+# Bounded so a long-lived process serving many distinct historical users in the
+# audit/change logs cannot grow this without limit (LRU beyond max_size, 1h TTL).
+_email_display_cache = BoundedTTLCache(max_size=2048, ttl_seconds=3600.0)
 
 
 def _display_email(value: str) -> str:
@@ -627,10 +629,9 @@ def _display_email(value: str) -> str:
     user_id = parse_scim_user_id(value)
     if not user_id:
         return value
-    now = time.time()
-    hit = _email_display_cache.get(user_id)
-    if hit and (now - hit[0]) < _EMAIL_DISPLAY_TTL:
-        return hit[1]
+    cached = _email_display_cache.get(user_id)
+    if cached is not None:
+        return cached
     resolved = value
     try:
         u = _app_sp_client().users.get(id=user_id)
@@ -638,7 +639,7 @@ def _display_email(value: str) -> str:
     except Exception as exc:  # noqa: BLE001 - display-only; never break the page
         print(f"[download-hub] identity resolve failed for {user_id!r}: {exc}")
         resolved = value
-    _email_display_cache[user_id] = (now, str(resolved))
+    _email_display_cache.put(user_id, str(resolved))
     return str(resolved)
 
 

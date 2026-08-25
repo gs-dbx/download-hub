@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/uswds/css/uswds.min.css">
-  <!-- Local color overlay — MUST load AFTER uswds.min.css to win overlaps. -->
-  <link rel="stylesheet" href="/static/css/app.css">
+  <!-- Local color overlay — MUST load AFTER uswds.min.css to win overlaps.
+       Cache-busted by asset_version (content hash) so a deploy's CSS/JS is never
+       served stale from the browser cache. -->
+  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
   <script src="/static/uswds/js/uswds-init.min.js"></script>
 </head>
 <body>
@@ -106,7 +108,7 @@
   </div>
 
   <script src="/static/uswds/js/uswds.min.js" defer></script>
-  <script src="/static/js/app.js" defer></script>
+  <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
   {# Page-specific scripts (e.g. admin.js on /admin). Without this block the
      admin console's tabs + column builder never load. #}
   {% block scripts_extra %}{% endblock %}

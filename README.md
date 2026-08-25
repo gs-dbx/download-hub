@@ -46,7 +46,7 @@ resources/              Databricks Asset Bundle resources
   grants.sql            Unity Catalog grants
 
 databricks.yml          Databricks Asset Bundle manifest (catalog, schema, warehouse, groups)
-tests/                  pytest unit tests (pure functions, no SDK required, 146 passed)
+tests/                  pytest unit tests (pure functions, no SDK required, 298 passed)
 docs/
   ARCHITECTURE.md       Request flow, module map, caching, auth model
   CONFIGURATION.md      Environment variables, report_config schema, worked example
@@ -67,7 +67,7 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Expected: 146 passed, 1 skipped.
+Expected: 298 passed, 1 skipped.
 
 ### 2. Deploy to Databricks Apps
 
@@ -112,25 +112,22 @@ Apply Unity Catalog grants from `resources/grants.sql` to each group and the app
 
 ### 4. Add your own report
 
-Insert a row into `{APP_CATALOG}.{APP_SCHEMA}.report_config`:
+Use the `/admin` console (recommended — query builder with OBO preview), or insert a row into `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`); columns/filters/date are optional:
 
 ```sql
 INSERT INTO main.default.report_config VALUES (
-  'my_report',
-  'My Report',
-  'main.default.my_table',
-  'report_date',
-  '[{"name":"col1","label":"Column 1"},{"name":"col2","label":"Count","format":"int"}]',
-  '[]',
-  'col1',
-  1,
-  true,
-  NULL,
-  current_timestamp()
+  'my_report', 'My Report',
+  'SELECT report_date, col1, col2 FROM main.default.my_table',  -- source_query (full SELECT)
+  'report_date',                                                 -- date_field (optional)
+  '[{"name":"col2","label":"Count","format":"int"}]',            -- columns_json (optional; empty = all cols)
+  '[{"name":"col1","label":"Column 1"}]',                        -- filters_json (optional)
+  NULL, 1, true,                                                 -- order_by, display_order, enabled
+  NULL, 'my_view', 'query', '',                                  -- download_group, view_key, kind, volume_root
+  current_timestamp(), 'admin@org'
 )
 ```
 
-The app picks up the row within ~5 minutes (registry TTL). See `docs/CONFIGURATION.md` and `docs/REPORTS.md` for the full schema.
+The app picks up the row within ~5 minutes (registry TTL). See `docs/CONFIGURATION.md` and `docs/REPORTS.md` for the full 15-column schema.
 
 ## Configure & rebrand (5 minutes)
 

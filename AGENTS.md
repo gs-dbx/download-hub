@@ -27,21 +27,29 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Must pass: 146 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
+Must pass: 298 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
 
 ## How to add a report (no code change)
 
-Insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config`:
+**Preferred:** use the `/admin` console (query builder → preview OBO → pick columns/filters → save). It writes the registry row for you as the app service principal.
+
+**Or** insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`), not a bare table; the app wraps it as `SELECT <cols> FROM ( <source_query> ) AS _q` and layers date scope / filters / ORDER BY. `columns_json`, `filters_json`, and `date_field` are all optional (empty `columns_json` = show every query column). The 15-column schema is `report_id, title, source_query, date_field, columns_json, filters_json, order_by, display_order, enabled, download_group, view_key, kind, volume_root, updated_at, updated_by`:
 
 ```sql
 INSERT INTO main.default.report_config VALUES (
-  'report_id', 'Title', 'main.default.table', 'date_col',
-  '[{"name":"col","label":"Label","format":"text"}]',
-  '[]', NULL, 1, true, NULL, current_timestamp()
+  'my_report', 'My Report',
+  'SELECT report_date, region, amount FROM main.default.my_table',  -- source_query (full SELECT)
+  'report_date',                                                     -- date_field (optional)
+  '[{"name":"amount","label":"Amount","format":"int"}]',             -- columns_json (optional; empty = all cols)
+  '[{"name":"region","label":"Region"}]',                            -- filters_json (optional)
+  NULL, 1, true,                                                     -- order_by, display_order, enabled
+  NULL,                                                              -- download_group (NULL = derive <view_key>_dl)
+  'my_view', 'query', '',                                            -- view_key, kind ('query'|'volume'), volume_root
+  current_timestamp(), 'admin@org'
 )
 ```
 
-The app picks it up within 5 minutes (TTL refresh). See `.github/copilot-instructions.md` and `docs/CONFIGURATION.md` for details.
+A `volume` report sets `kind='volume'` + a pinned `volume_root` (`/Volumes/...`) and leaves `source_query` empty. The app picks up the row within 5 minutes (TTL refresh). See `.github/copilot-instructions.md` and `docs/CONFIGURATION.md` for details.
 
 ## Full reference
 

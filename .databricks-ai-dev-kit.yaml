@@ -1,9 +1,0 @@
-# AI Dev Kit project configuration
-# project: Override the auto-detected project name
-project: download_hub
-
-# tags: Applied to every resource created by the MCP server
-tags:
-  project: download_hub
-  owner: greg.skinner@databricks.com
-  env: dev

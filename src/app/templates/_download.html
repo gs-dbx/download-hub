@@ -29,14 +29,6 @@
           </div>
         </div>
 
-        {# Populated + shown by app.js when POST /download returns an error. #}
-        <div class="usa-alert usa-alert--error usa-alert--slim margin-bottom-2"
-             id="download-error" data-role="download-error" role="alert" hidden>
-          <div class="usa-alert__body">
-            <p class="usa-alert__text" data-role="download-error-text"></p>
-          </div>
-        </div>
-
         <div class="usa-checkbox">
           <input class="usa-checkbox__input" id="download-ack" type="checkbox"
                  name="acknowledged" value="true" required>
@@ -63,6 +55,37 @@
             <label class="usa-radio__label" for="download-format-xlsx">Excel</label>
           </div>
         </fieldset>
+
+        {#
+          Error region for the app.js fetch-intercepted submit: the server's
+          specific message (over-cap 413, denied, etc.) is shown here instead of
+          a raw full-page error. Hidden until app.js reveals it.
+        #}
+        <div class="usa-alert usa-alert--error usa-alert--slim margin-top-2"
+             data-role="download-error" role="alert" hidden>
+          <div class="usa-alert__body">
+            <p class="usa-alert__text" data-role="download-error-text"></p>
+          </div>
+        </div>
+
+        {#
+          Large-export "ready" panel: when the export exceeds the direct-download
+          cap the server saves it to the exports volume and returns JSON instead
+          of a file; app.js reveals this with a link to GET /download/retrieve.
+        #}
+        <div class="usa-alert usa-alert--success margin-top-2"
+             data-role="download-ready" role="status" hidden>
+          <div class="usa-alert__body">
+            <p class="usa-alert__text" data-role="download-ready-text"></p>
+            <a class="usa-button margin-top-1" data-role="download-ready-link"
+               href="#">
+              <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+                <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+              </svg>
+              Download the saved file
+            </a>
+          </div>
+        </div>
 
         <ul class="usa-button-group margin-top-3">
           <li class="usa-button-group__item">

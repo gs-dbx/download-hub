@@ -8,6 +8,7 @@ from app.render import (
     align_class,
     cell_text,
     display_rows,
+    format_float,
     haystack_for,
     header_cells,
     pct_class,
@@ -59,6 +60,51 @@ def test_cell_text_unknown_format_treated_as_text():
     """An unknown format falls back to string/empty behavior."""
     assert cell_text("x", "currency") == "x"
     assert cell_text(None, "currency") == ""
+
+
+# --- float / double ------------------------------------------------------
+
+
+def test_cell_text_float_thousands_two_decimals():
+    """float format renders thousands separators + 2 decimals."""
+    assert cell_text(1234567.5, "float") == "1,234,567.50"
+
+
+def test_cell_text_float_from_string():
+    """float format coerces the string the SQL API returns."""
+    assert cell_text("1234.5", "float") == "1,234.50"
+
+
+def test_cell_text_double_treated_as_float():
+    """double is an alias for float."""
+    assert cell_text(1234.5, "double") == "1,234.50"
+
+
+def test_cell_text_float_none_em_dash():
+    """A NULL float renders the em dash."""
+    assert cell_text(None, "float") == EM_DASH
+    assert cell_text("", "double") == EM_DASH
+
+
+def test_format_float_helper_decimals():
+    """format_float honors a custom decimal count and rounds."""
+    assert format_float(1234.567, 3) == "1,234.567"
+    assert format_float(1234.5) == "1,234.50"
+    assert format_float(None) == EM_DASH
+
+
+def test_align_class_float_double_right():
+    """float/double columns are right-aligned like int/pct."""
+    assert align_class("float") == "text-right"
+    assert align_class("double") == "text-right"
+
+
+def test_display_rows_float_cell_right_aligned():
+    """float cells carry the text-right alignment class and formatted text."""
+    cols = [ColumnSpec("amount", "Amount", "float")]
+    cells = display_rows(cols, [{"amount": 9999.5}])[0]
+    assert cells[0]["css"] == "text-right"
+    assert cells[0]["text"] == "9,999.50"
 
 
 # --- pct_class -----------------------------------------------------------

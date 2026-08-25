@@ -20,13 +20,6 @@ Example: if you need a new cell formatter, add it to `shaping.py`, test it with 
 
 4. **Match existing code style:** 2-space indent in `src/app/`, type hints, module-level docstrings, test everything that's not `main.py`.
 
-## Key features to know about
-
-- **Query-based reports.** `report_config.source_query` is a full `SELECT` (wrapped as a subquery); displayed columns default to all query columns unless `columns_json` narrows them. `date_field`/`filters_json` are optional.
-- **Views + switcher.** `report_view` (view_key/title/order) groups reports; a report's `view_key` is the Databricks group granting view access. Members of >1 view get a view switcher.
-- **Admin console at `/admin`** (gated by `ADMIN_GROUP`; writes as the app service principal): tabs for **Report Views**, **Reports** (with a run-a-query column/filter builder), **System Config** (the download disclaimer, stored in the `app_config` table), and **Audit Log** (with CSV export).
-- **Tables:** `report_config`, `report_view`, `app_config`, `download_audit` — all created + migrated idempotently by `src/notebooks/generate_daily_metrics.py`.
-
 ## How to run tests
 
 ```bash
@@ -34,28 +27,19 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Must pass: 197 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
+Must pass: 146 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
 
 ## How to add a report (no code change)
 
-Prefer the **admin console** (`/admin` → Reports → run a query → pick columns/filters → save). Or insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config`:
+Insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config`:
 
 ```sql
-INSERT INTO main.default.report_config
-  (report_id, title, source_query, date_field, columns_json, filters_json,
-   order_by, display_order, enabled, download_group, view_key, updated_at, updated_by)
-VALUES (
-  'report_id', 'Title', 'SELECT * FROM main.default.table', 'date_col',
+INSERT INTO main.default.report_config VALUES (
+  'report_id', 'Title', 'main.default.table', 'date_col',
   '[{"name":"col","label":"Label","format":"text"}]',
-  '[]', NULL, 1, true, NULL, 'view_group', current_timestamp(), 'you@example.com'
+  '[]', NULL, 1, true, NULL, current_timestamp()
 )
 ```
-
-`source_query` is a full `SELECT` (wrapped as a subquery). `date_col` and the
-`columns_json` array are optional — leave `date_field` NULL for no date scope,
-and leave `columns_json` empty (`'[]'`) to show every column the query returns.
-`view_key` is the Databricks group that grants view access (the download group is
-derived as `<view_key>` + `DOWNLOAD_GROUP_SUFFIX` unless `download_group` is set).
 
 The app picks it up within 5 minutes (TTL refresh). See `.github/copilot-instructions.md` and `docs/CONFIGURATION.md` for details.
 

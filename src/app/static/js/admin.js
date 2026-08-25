@@ -124,6 +124,20 @@
   }
   if (viewSel) viewSel.addEventListener("change", refreshDownloadHint);
 
+  // Report type: query reports use the SQL builder; volume reports use a single
+  // volume_root field. Toggle which section shows.
+  var kindSel = byRole("report-kind");
+  var querySection = byRole("query-section");
+  var volumeSection = byRole("volume-section");
+  var volumeRootInput = byRole("volume-root");
+  function applyKind() {
+    var isVolume = kindSel && kindSel.value === "volume";
+    if (querySection) querySection.hidden = isVolume;
+    if (volumeSection) volumeSection.hidden = !isVolume;
+  }
+  if (kindSel) kindSel.addEventListener("change", applyKind);
+  applyKind();
+
   // Build one picker row for a column, with optional preset state.
   // preset = {show:bool, label:str, format:str, filter:bool} or undefined.
   function makeRow(colName, preset) {
@@ -133,10 +147,18 @@
     var label = preset && preset.label != null ? preset.label : colName;
     var fmt = (preset && preset.format) || "text";
     var isFilter = preset ? !!preset.filter : false;
+    var agg = (preset && preset.agg) || "";
 
-    var fmtOpts = ["text", "int", "pct"]
+    var fmtOpts = ["text", "int", "float", "pct"]
       .map(function (f) {
         return '<option value="' + f + '"' + (f === fmt ? " selected" : "") + ">" + f + "</option>";
+      })
+      .join("");
+    // Aggregation applied to this column; "" = plain column (grouped, not aggregated).
+    var aggOpts = ["", "sum", "min", "avg", "max", "first", "last"]
+      .map(function (a) {
+        var lbl = a === "" ? "—" : a;
+        return '<option value="' + a + '"' + (a === agg ? " selected" : "") + ">" + lbl + "</option>";
       })
       .join("");
 
@@ -146,6 +168,8 @@
       "<td><code>" + colName + "</code></td>" +
       '<td><input class="usa-input usa-input--inline" data-cell="label" value=""></td>' +
       '<td><select class="usa-select usa-select--inline" data-cell="format">' + fmtOpts + "</select></td>" +
+      '<td><select class="usa-select usa-select--inline" data-cell="agg" ' +
+      'title="Aggregate this column (injects SUM/MIN/AVG/… + GROUP BY the others)">' + aggOpts + "</select></td>" +
       '<td><input type="checkbox" class="usa-checkbox__input--inline" data-cell="filter"' +
       (isFilter ? " checked" : "") + "></td>";
     // Set the label value via property (avoids HTML-escaping issues).
@@ -217,8 +241,18 @@
       var show = tr.querySelector('[data-cell="show"]').checked;
       var label = tr.querySelector('[data-cell="label"]').value || name;
       var fmt = tr.querySelector('[data-cell="format"]').value || "text";
+      var aggSel = tr.querySelector('[data-cell="agg"]');
+      var agg = aggSel ? aggSel.value : "";
       var isFilter = tr.querySelector('[data-cell="filter"]').checked;
-      if (show) cols.push({ name: name, label: label, format: fmt });
+      if (show) {
+        if (agg) {
+          // Aggregated column: `source` is this query column; the server derives
+          // the output alias (source_agg). GROUP BY covers the plain columns.
+          cols.push({ label: label, format: fmt, agg: agg, source: name });
+        } else {
+          cols.push({ name: name, label: label, format: fmt });
+        }
+      }
       if (isFilter) filters.push({ field: name, label: label });
     });
     byRole("columns-json").value = JSON.stringify(cols);
@@ -240,14 +274,23 @@
     document.getElementById("r-enabled").checked = btn.getAttribute("data-enabled") === "true";
     if (dlGroupInput) dlGroupInput.value = btn.getAttribute("data-download-group") || "";
     if (viewSel) viewSel.value = btn.getAttribute("data-view-key") || "";
+    if (kindSel) kindSel.value = btn.getAttribute("data-kind") || "query";
+    if (volumeRootInput) volumeRootInput.value = btn.getAttribute("data-volume-root") || "";
+    applyKind();
     refreshDownloadHint();
 
     var cols = [];
     var presetByName = {};
     try {
       JSON.parse(btn.getAttribute("data-columns-json") || "[]").forEach(function (c) {
-        cols.push(c.name);
-        presetByName[c.name] = { show: true, label: c.label, format: c.format || "text", filter: false };
+        // Aggregated columns key the picker by their source query column; plain
+        // columns key by name. `agg` restores the per-row aggregation dropdown.
+        var key = c.agg ? (c.source || c.name) : c.name;
+        cols.push(key);
+        presetByName[key] = {
+          show: true, label: c.label, format: c.format || "text",
+          filter: false, agg: c.agg || "",
+        };
       });
       JSON.parse(btn.getAttribute("data-filters-json") || "[]").forEach(function (f) {
         if (!presetByName[f.field]) {
@@ -282,6 +325,7 @@
       columnsBody.innerHTML = "";
       columnsWrap.hidden = true;
       queryStatus.textContent = "";
+      applyKind();
       refreshDownloadHint();
     });
   }

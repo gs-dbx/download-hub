@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}{{ report.title }}{% endblock %}
+
+{% block content %}
+{#
+  Volume report page — browse a single-root Unity Catalog volume (folders first,
+  then files) with metadata + gated download. Analog of report.html. All the
+  data-role hooks + data-volume-report-id form the app.js volume-browser contract.
+  The folder-listing fragment (_volume_rows.html) is swapped in by
+  GET /volume/{report_id}/list?path=<root-relative subpath>.
+
+  Context expected:
+    report          — object with .report_id, .title, optional .description
+    current_path    — the root-relative subpath rendered on first load ("" = root)
+    root_label      — label for the root breadcrumb (default "Home")
+    breadcrumbs     — list of {name, subpath} for the initial (no-JS) render; the
+                      first is root (subpath ""), the last is the current folder
+    entries         — the initial folder listing (see _volume_rows.html)
+    can_download    — whether to show per-file Download actions + the modal
+    disclaimer      — data-handling notice shown in the download modal
+    app_version     — footer stamp
+#}
+<div class="app-volume" data-volume-report-id="{{ report.report_id }}"
+     data-volume-current-path="{{ current_path|default('') }}"
+     data-volume-root-label="{{ root_label|default('Home') }}">
+  <div class="app-hero">
+    <h1 class="font-heading-xl app-hero__title">{{ report.title }}</h1>
+    {% if report.description %}
+    <p class="usa-intro font-body-sm app-hero__sub">{{ report.description }}</p>
+    {% endif %}
+  </div>
+
+  {#
+    Breadcrumb trail: the server renders the initial path (no-JS fallback); app.js
+    rebuilds it on every folder navigation. Each crumb except the current one is a
+    button that drills to that ancestor. `breadcrumbs` is a list of {name, subpath}
+    with the first entry being the root (subpath "").
+  #}
+  <nav class="app-breadcrumbs" aria-label="Folder path" data-role="volume-breadcrumbs">
+    {% for c in breadcrumbs|default([]) %}
+    {% if loop.last %}
+    <span class="app-breadcrumbs__current" aria-current="true">{{ c.name }}</span>
+    {% else %}
+    <button type="button" class="app-crumb" data-role="volume-crumb"
+            data-subpath="{{ c.subpath }}">{{ c.name }}</button>
+    <span class="app-breadcrumbs__sep" aria-hidden="true">/</span>
+    {% endif %}
+    {% endfor %}
+  </nav>
+
+  {#
+    The table sits in a positioned wrapper so app.js can overlay a loading spinner
+    (data-role="volume-spinner") while a folder loads. Reuses the shared
+    .app-table-wrap / .app-spinner styles from the report view.
+  #}
+  <div class="app-table-wrap" data-role="volume-table-wrap">
+    <div class="app-spinner" data-role="volume-spinner" hidden aria-hidden="true">
+      <span class="app-spinner__dot" role="status" aria-label="Loading"></span>
+    </div>
+    <table class="usa-table usa-table--striped usa-table--borderless width-full"
+           data-role="volume-table">
+      <caption class="usa-sr-only">Files and folders in {{ report.title }}</caption>
+      <thead>
+        <tr>
+          <th scope="col">Name</th>
+          <th scope="col" class="text-right">Size</th>
+          <th scope="col">Modified</th>
+          {% if can_download %}
+          <th scope="col" class="text-right"><span class="usa-sr-only">Actions</span></th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody id="volume-tbody" data-role="volume-tbody">
+        {% include "_volume_rows.html" %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if can_download %}
+  {#
+    Volume download modal — same acknowledgement + justification pattern as
+    _download.html. app.js sets the hidden `path` (root-relative file subpath) and
+    the displayed file name when a row's Download button is clicked, then USWDS
+    opens the modal (the button carries data-open-modal + aria-controls). The submit
+    is fetch-intercepted (button spinner, blob download, server error inline).
+  #}
+  <div class="usa-modal usa-modal--lg" id="volume-download-modal"
+       aria-labelledby="volume-download-heading"
+       aria-describedby="volume-download-desc" data-force-action="false">
+    <div class="usa-modal__content">
+      <div class="usa-modal__main">
+        <h2 class="usa-modal__heading" id="volume-download-heading">Download file</h2>
+        <form class="usa-form usa-form--large" id="volume-download-form"
+              data-role="volume-download-form" method="post"
+              action="/volume/{{ report.report_id }}/download">
+          <input type="hidden" name="report_id" value="{{ report.report_id }}">
+          <input type="hidden" name="path" id="volume-download-path"
+                 data-role="volume-path" value="">
+
+          <p class="margin-top-0">
+            File: <span class="app-vol-dl-name" data-role="volume-download-name"></span>
+          </p>
+
+          <div class="usa-alert usa-alert--warning usa-alert--slim margin-bottom-2"
+               id="volume-download-desc">
+            <div class="usa-alert__body">
+              <p class="usa-alert__text">{{ disclaimer }}</p>
+            </div>
+          </div>
+
+          <div class="usa-checkbox">
+            <input class="usa-checkbox__input" id="volume-download-ack" type="checkbox"
+                   name="acknowledged" value="true" required>
+            <label class="usa-checkbox__label" for="volume-download-ack">
+              I acknowledge the data-handling notice above.
+            </label>
+          </div>
+
+          <label class="usa-label" for="volume-download-justification">Justification (required)</label>
+          <textarea class="usa-textarea" id="volume-download-justification" name="justification"
+                    required aria-required="true"
+                    placeholder="Business reason for downloading this file"></textarea>
+
+          <div class="usa-alert usa-alert--error usa-alert--slim margin-top-2"
+               data-role="volume-download-error" role="alert" hidden>
+            <div class="usa-alert__body">
+              <p class="usa-alert__text" data-role="volume-download-error-text"></p>
+            </div>
+          </div>
+
+          <ul class="usa-button-group margin-top-3">
+            <li class="usa-button-group__item">
+              <button class="usa-button app-download-btn" type="submit"
+                      data-role="volume-download-submit">Download</button>
+            </li>
+            <li class="usa-button-group__item">
+              <button type="button" class="usa-button usa-button--unstyled padding-105 text-center"
+                      data-close-modal>Cancel</button>
+            </li>
+          </ul>
+        </form>
+      </div>
+      <button type="button" class="usa-button usa-modal__close" aria-label="Close this window"
+              data-close-modal>
+        <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+          <use xlink:href="/static/uswds/img/sprite.svg#close"></use>
+        </svg>
+      </button>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block footer_extra %}App version {{ app_version }}.{% endblock %}

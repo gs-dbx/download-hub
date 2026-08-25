@@ -6,8 +6,9 @@ stays dumb. May import ``reports.ColumnSpec`` and reuse the ``shaping`` formatte
 it has NO SDK/fastapi/network import, so it is unit-testable offline.
 
 Formats:
-  * ``int``  -> thousands-separated count (``format_count``)
-  * ``pct``  -> signed one-decimal percentage (``format_pct``), colored by sign
+  * ``int``            -> thousands-separated count (``format_count``)
+  * ``float``/``double`` -> thousands-separated fixed-decimal number (``format_float``)
+  * ``pct``            -> signed one-decimal percentage (``format_pct``), colored by sign
   * ``text`` / unknown -> the raw value as a string (``""`` for ``None``)
 """
 
@@ -30,8 +31,31 @@ __all__ = [
     "header_cells",
     "display_rows",
     "haystack_for",
+    "format_float",
     "EM_DASH",
 ]
+
+# Numeric formats that render right-aligned with tabular figures.
+_NUMERIC_FORMATS = ("int", "pct", "float", "double")
+
+# Default decimal places for the ``float``/``double`` display format.
+_FLOAT_DECIMALS = 2
+
+
+def format_float(x: float | None, decimals: int = _FLOAT_DECIMALS) -> str:
+    """Format a float with thousands separators and fixed decimal places.
+
+    Args:
+        x: The float value, or ``None``.
+        decimals: Number of decimal places to show (default 2).
+
+    Returns:
+        ``"—"`` when ``x`` is ``None``; otherwise the value with commas and
+        ``decimals`` places (e.g. ``1234.5`` -> ``"1,234.50"``).
+    """
+    if x is None:
+        return EM_DASH
+    return f"{x:,.{decimals}f}"
 
 
 def cell_text(value: object, fmt: str) -> str:
@@ -39,14 +63,18 @@ def cell_text(value: object, fmt: str) -> str:
 
     Args:
         value: The raw scalar the SQL API returned (``str``, number, or ``None``).
-        fmt: The column format hint (``"int"``, ``"pct"``, ``"text"``/unknown).
+        fmt: The column format hint (``"int"``, ``"float"``/``"double"``, ``"pct"``,
+            ``"text"``/unknown).
 
     Returns:
-        ``format_count`` for ``int``, ``format_pct`` for ``pct``; otherwise the
-        value as a string (``""`` when ``None``).
+        ``format_count`` for ``int``, ``format_float`` for ``float``/``double``,
+        ``format_pct`` for ``pct``; otherwise the value as a string (``""`` when
+        ``None``).
     """
     if fmt == "int":
         return format_count(_to_int(value))
+    if fmt in ("float", "double"):
+        return format_float(_to_float(value))
     if fmt == "pct":
         return format_pct(_to_float(value))
     return "" if value is None else str(value)
@@ -79,9 +107,10 @@ def align_class(fmt: str) -> str:
         fmt: The column format hint.
 
     Returns:
-        ``"text-right"`` for numeric formats (``int``/``pct``), else ``""``.
+        ``"text-right"`` for numeric formats (``int``/``float``/``double``/``pct``),
+        else ``""``.
     """
-    return "text-right" if fmt in ("int", "pct") else ""
+    return "text-right" if fmt in _NUMERIC_FORMATS else ""
 
 
 def header_cells(columns: list[ColumnSpec]) -> list[dict]:
@@ -91,9 +120,13 @@ def header_cells(columns: list[ColumnSpec]) -> list[dict]:
         columns: The report's ordered display columns.
 
     Returns:
-        A list of ``{"label", "align"}`` dicts aligned to ``columns`` order.
+        A list of ``{"name", "label", "align"}`` dicts aligned to ``columns``
+        order. ``name`` is the source column (used as the click-to-sort key).
     """
-    return [{"label": c.label, "align": align_class(c.format)} for c in columns]
+    return [
+        {"name": c.name, "label": c.label, "align": align_class(c.format)}
+        for c in columns
+    ]
 
 
 def display_rows(columns: list[ColumnSpec], rows: list[dict]) -> list[list[dict]]:

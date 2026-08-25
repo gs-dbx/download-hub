@@ -158,7 +158,7 @@ def filters_summary(selected: dict[str, str]) -> str:
     """Summarize the applied filters as a stable ``"field=value; ..."`` string.
 
     Sorted by field for determinism; empty-value selections (the "no
-    constraint" sentinel) are dropped. Used as the audit ``filter_summary`` value
+    constraint" sentinel) are dropped. Used as the audit ``drain_filter`` value
     (its column keeps the legacy name).
 
     Args:
@@ -185,6 +185,53 @@ def distinct_values(rows: list[dict], field: str) -> list[str]:
     """
     seen = {str(r[field]) for r in rows if r.get(field) is not None}
     return sorted(seen)
+
+
+def sort_rows(
+    rows: list[dict], key: str, direction: str = "asc", numeric: bool = False
+) -> list[dict]:
+    """Return ``rows`` sorted by ``key`` (stable); missing values always last.
+
+    Rows whose ``key`` is ``None`` or a blank string are treated as "missing" and
+    are appended after the sorted present-value rows regardless of ``direction``,
+    so an ascending or descending sort never floats blanks to the top. Present
+    rows sort numerically (parsing the raw scalar as ``float``) when ``numeric``
+    is set, else case-insensitively as text. Python's sort is stable, so rows
+    that compare equal keep their prior (server) order.
+
+    Args:
+        rows: The rows to sort.
+        key: The column name to sort by; an empty/falsey key returns ``rows``
+            unchanged (no sort).
+        direction: ``"desc"`` for descending; anything else is ascending.
+        numeric: When ``True``, compare parsed ``float`` values (non-numeric
+            values sort as ``0.0``); when ``False``, compare lowercased text.
+
+    Returns:
+        A new list: present-value rows in sort order, then missing-value rows.
+    """
+    if not key:
+        return rows
+    present: list[dict] = []
+    missing: list[dict] = []
+    for r in rows:
+        v = r.get(key)
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            missing.append(r)
+        else:
+            present.append(r)
+
+    def _key(r: dict):
+        v = r.get(key)
+        if numeric:
+            try:
+                return float(str(v).replace(",", "").replace("%", "").strip())
+            except (TypeError, ValueError):
+                return 0.0
+        return str(v).lower()
+
+    present.sort(key=_key, reverse=(direction == "desc"))
+    return present + missing
 
 
 def paginate(

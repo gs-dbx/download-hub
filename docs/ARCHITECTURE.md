@@ -1,5 +1,14 @@
 # Architecture
 
+## Report kinds
+
+A `report_config` row is one of two **kinds** (the `kind` column, default `query`):
+
+- **`query`** — reads a SQL `SELECT` (`source_query`) OBO into a per-user snapshot, then filters/searches/sorts/paginates in memory and offers a gated CSV/XLSX download. Columns may be aggregated (`AGG(source)` + join-safe `GROUP BY`).
+- **`volume`** — browses a pinned UC Volume root (`volume_root`) via the Files API OBO: folders-first listing, breadcrumb traversal (path-jailed to the root in `volumes.py`), and per-file gated download. Same acknowledgement + justification + audit-first write as query downloads. Routes: `GET /volume/{id}/list`, `POST /volume/{id}/download`.
+
+Both kinds share the group-based visibility/download gating and the audit table.
+
 ## Request flow
 
 ```
@@ -55,29 +64,21 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 
 **Routes:**
 - `GET /health` — liveness probe (no auth)
-- `GET /` — redirect to the first report the user can see
-- `GET /report/{report_id}` — full page render (tabs = current view; view switcher)
+- `GET /` — redirect to first enabled report
+- `GET /report/{report_id}` — full page render
 - `GET /report/{report_id}/table` — fragment render (filters/search/page apply)
-- `POST /download` — export + audit (audit-first, size-capped)
-- `GET /admin` — admin console (Report Views / Reports / System Config / Audit Log)
-- `POST /admin/view` — upsert a `report_view` row (SP write)
-- `POST /admin/report` — upsert a `report_config` row (SP write)
-- `POST /admin/preview` — run an admin query OBO, return columns + sample rows (JSON)
-- `POST /admin/config` — set the download disclaimer in `app_config` (SP write)
-- `GET /admin/audit.csv` — download the audit log as CSV (SP read)
+- `POST /download` — export + audit (audit-first)
 
 **Key functions:**
 - `_user_client(token)` — build fresh per-request `WorkspaceClient` with `auth_type="pat"` (OBO reads)
-- `_app_sp_client()` — cached `WorkspaceClient()` for SP reads/writes (registry, audit, admin)
-- `_exec()` — wrapper around `statement_execution.execute_statement()` with `asyncio.to_thread()`; pages **all** result chunks (no truncation)
-- `_run_sql()` / `_run_sql_sp_query()` / `_run_sql_sp()` — execute OBO / SP-read / SP-write
-- `_load_reports()` / `_load_views()` / `_load_app_config()` — TTL-cached registry/view/config reads (SP)
-- `_effective_disclaimer()` — disclaimer from `app_config`, else env, else default
-- `_ensure_snapshot()` — read/cache per-user snapshot (date scope only when a date is chosen)
-- `_me()` / `_readable_email()` — resolve identity once; readable email from `me().user_name`
-- `_visible_reports()` / `_views_for_user()` — view visibility + switcher descriptors
-- `_resolve_can_download()` — kill switch + download-group membership
-- `_require_admin()` — 401/403 gate for the admin routes (membership of `ADMIN_GROUP`)
+- `_app_sp_client()` — cached `WorkspaceClient()` for SP reads/writes (registry, audit)
+- `_exec()` — wrapper around `statement_execution.execute_statement()` with `asyncio.to_thread()`
+- `_run_sql()` — execute OBO (as user)
+- `_run_sql_sp_query()` — execute as SP (registry read)
+- `_run_sql_sp()` — execute as SP (audit write)
+- `_load_reports()` — read report registry, parse configs, TTL-cache
+- `_ensure_snapshot()` — read/cache per-user snapshot for (report, date)
+- `_resolve_can_download()` — check kill switch + group membership
 
 ### Pure modules (no SDK, no async, fully unit-testable)
 
@@ -90,29 +91,18 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 
 **`auth.py`** — Token, email, group membership
 - `extract_user_token()` — read X-Forwarded-Access-Token header (raise 401 if absent)
-- `extract_user_email()` — read X-Forwarded-User header (fallback to "")
-- `is_member()` / `group_display_names()` — group membership from a `me()` object
-- `effective_view_group()` — the report's view group (its `view_key`)
-- `derive_download_group()` — `<view_key>` + suffix
-- `effective_download_group()` — explicit `download_group`, else derived from `view_key`
-- `can_view()` — member of the view group OR the download group
-- `is_admin()` — member of `ADMIN_GROUP`
+- `extract_user_email()` — read X-Forwarded-User header (fallback to "unknown")
+- `is_member()` — check if user is in a Databricks group
+- `effective_download_group()` — resolve report's download_group or fall back to default
 
 **`reports.py`** — Config model & query builders
-- `parse_report_config()` / `parse_report_view()` — parse rows → `ReportConfig` / `ReportView`
-- `resolve_columns()` — effective display columns (configured wins; else all query columns)
-- `validate_identifier()` / `validate_query()` — allowlist-regex identifiers; single-statement query
-- `build_report_query()` — parameterized SELECT wrapping the `source_query` subquery
-- `build_report_dates_query()` / `build_distinct_values_query()` — date list / distinct filter values
-- `build_report_config_query()` / `build_report_view_query()` — registry reads
-- `build_report_config_upsert()` / `build_report_view_upsert()` — admin MERGE writes (bound params)
-- `build_preview_query()` — row-limited preview of an admin query
-- `build_app_config_query()` / `build_app_config_upsert()` — system-config key/value read/write
-- `build_audit_log_query()` + `AUDIT_LOG_COLUMNS` — audit-log read for the admin tab/CSV
-
-**`errors.py`** — Explicit error classification
-- `friendly_error()` — map a raw DB/SDK error to concise user-facing text
-- `ReportDataError` — RuntimeError subclass carrying the friendly message
+- `parse_report_config()` — parse row dict → ReportConfig dataclass (kind, source_query, volume_root, columns incl. aggregates)
+- `validate_identifier()` — check identifier against allowlist regex
+- `validate_volume_root()` — validate a volume report's pinned `/Volumes/…` root
+- `normalize_kind()` / `normalize_format()` / `normalize_agg()` — validate the enums (query|volume; text/int/float/pct; sum/min/avg/max/first/last)
+- `split_columns()` — split display columns into plain (grouped) + aggregate projections
+- `build_report_query()` — build parameterized SELECT (optional `aggregates` → `AGG(source)` + join-safe `GROUP BY`)
+- `build_report_config_query()` / `build_report_config_upsert()` / `build_report_config_delete()` — registry read/write/delete builders
 
 **`cache.py`** — Snapshot cache & filtering
 - `SnapshotCache` — bounded LRU (max 128 entries)
@@ -134,13 +124,24 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `haystack_for()` — concatenate searchable columns into haystack
 
 **`shaping.py`** — Format helpers
-- `format_count()` — format as thousands-separated integer
+- `format_int()` — format as thousands-separated int
 - `format_pct()` — format as signed one-decimal percentage
 - `format_report_date()` — format timestamp as date string
 
 **`audit.py`** — Audit row builders
-- `build_audit_row()` — construct audit record dict
+- `build_audit_row()` — construct audit record dict (filter_summary, source_query, report_id/title)
 - `build_audit_insert()` — build parameterized INSERT query
+
+**`volumes.py`** — Volume browsing (path-jail + OBO Files API)
+- `resolve_within_root()` — the security boundary: jail a root-relative subpath to the pinned root (reject `..`/absolute/backslash/sibling-prefix escapes)
+- `breadcrumbs()` — build the root→current crumb trail
+- `list_dir()` — OBO folder listing (folders + files with size/modified), root-relative subpaths
+- `download_file()` — OBO file read (refuses directories); returns (bytes, filename)
+- `friendly_volume_error()` — map Files-API errors to concise user text
+
+**`errors.py`** — User-facing error classification
+- `friendly_error()` — map a raw DB/SDK error to a concise message + safe `(Details: …)` excerpt (genuine authorization phrases only → permission message)
+- `ReportDataError` — RuntimeError carrying already-friendly text
 
 ---
 
@@ -167,18 +168,7 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - **Read identity:** App service principal (not the user)
 - **Lifetime:** In-process, survives across requests; reset on server restart
 
-**Why:** The registry is read once per app startup, then reused. If an admin edits the registry, it appears within 5 minutes (TTL) — **or immediately**, because every admin write (`/admin/*`) invalidates the caches. Restarting the app also clears them.
-
-The **view registry** (`report_view`) and **system config** (`app_config`) are cached the same way (same TTL, same invalidation). The per-user snapshot is date-scoped only when a date is chosen; an "All dates" selection reads the whole result (no date `WHERE`).
-
-### Registry & support tables
-
-| Table | Read as | Written by | Purpose |
-|-------|---------|-----------|---------|
-| `report_config` | SP | admin (`/admin/report`) | report definitions (`source_query`, columns, filters, `view_key`, …) |
-| `report_view` | SP | admin (`/admin/view`) | views (switcher): `view_key`, `title`, `display_order`, `enabled` |
-| `app_config` | SP | admin (`/admin/config`) | key/value system config (e.g. `download_disclaimer`) |
-| `download_audit` | SP (audit tab) | SP (each download) | one audit row per download (incl. `source_query`, `filter_summary`) |
+**Why:** The registry is read once per app startup, then reused. If an admin edits the registry, it appears within 5 minutes (TTL). This avoids repeated registry SELECTs while keeping the app responsive to config changes. Restart the app to pick up changes immediately.
 
 ---
 
@@ -212,13 +202,9 @@ Download is allowed only when BOTH conditions are true:
 1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty)
 2. **Group membership:** user is a member of the report's **effective download group**
    - If `report.download_group` is set (non-NULL, non-empty after strip), that's the effective group
-   - Otherwise it is **derived** as `<view_key>` + `DOWNLOAD_GROUP_SUFFIX` (default `_dl`)
+   - Otherwise, fall back to the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`)
 
 The membership check is re-done server-side on every `POST /download` (defense in depth). The UI panel is never trusted on its own.
-
-**View visibility** is a separate, broader gate: a report's tab is shown when the user is a member of its view group (`view_key`) **OR** its download group (`can_view`). Admin routes are gated by membership of `ADMIN_GROUP` (`_require_admin`), and admin writes run as the app service principal.
-
-**Export size caps:** downloads are built in memory, so they are capped by `MAX_DOWNLOAD_ROWS` (CSV, default 100000) and `MAX_XLSX_ROWS` (default 25000); over the cap the download returns HTTP 413 asking the user to narrow filters or choose CSV.
 
 ---
 
@@ -242,15 +228,14 @@ No string interpolation, no SQL injection possible.
 
 ### Identifiers: validated then interpolated
 
-All identifiers (column names, filter fields, `order_by`) come from admin-authored config and must be validated before interpolation. The `source_query` is admin-authored SQL: it is validated to be a single statement and wrapped as a subquery, but not otherwise parsed.
+All identifiers (column names, filter fields, `order_by`, dotted parts of `source_fqn`) come from admin-authored config and must be validated before interpolation.
 
 Example:
 ```python
-# Identifiers from config — validated against the allowlist regex
-col = validate_identifier(column_name)      # raises ValueError if bad
-# source_query — validated single statement, wrapped as a subquery
-src = f"( {validate_query(source_query)} ) AS _q"
-sql = f"SELECT {col} FROM {src}"
+# Identifier from config — validated against allowlist regex
+fqn = validate_fqn(source_fqn)  # raises ValueError if bad
+# Re-joined and safe to interpolate
+sql = f"SELECT ... FROM {fqn}"
 ```
 
 The allowlist regex is strict: `^[A-Za-z_][A-Za-z0-9_]*$`. No hyphens, no leading digits, no special characters. A bad identifier is caught immediately, raising `ValueError` at query-build time (not runtime).
@@ -297,8 +282,6 @@ pip install --no-index --find-links src/app/wheelhouse -r requirements.lock
 No PyPI contact, no mirror needed.
 
 **Guard:** `tests/test_branding_guards.py` fails if any external URL (https://, //, cdn., unpkg.) appears in authored templates/CSS/JS. This is a hard rule enforced by CI.
-
-**Asset cache-busting:** `app.css`, `app.js`, and `admin.js` are referenced with `?v=<hash>`, where `<hash>` is a content hash of those files computed at startup. A redeploy that changes them changes the query string, so browsers refetch automatically — no manual version bump. A whole-page copy/paste deterrent (CSS `user-select:none` + JS blocking copy/cut/contextmenu/dragstart, form inputs exempt) is also applied client-side; it is a deterrent only.
 
 ---
 

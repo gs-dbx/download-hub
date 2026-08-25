@@ -59,6 +59,14 @@ databricks bundle run metrics_seed -t <env>   # seed report_config, download_aud
 databricks bundle run download_hub -t <env>   # start the app
 ```
 
+> **Run `metrics_seed` before (or right after) deploying new app code.** The seed
+> notebook is also the **schema migration**: it idempotently `ALTER`s
+> `report_config` to add any missing columns the current app expects — including
+> `kind` + `volume_root` (volume reports) and, on older installs, `source_query`
+> (backfilled from the retired `source_fqn`), `view_key`, and `updated_by`. The
+> app's registry read selects these columns, so a deploy whose code is newer than
+> the table schema will fail to load reports until the migration runs.
+
 Then recreate the non-code pieces in the new workspace:
 
 1. **Groups** — create `download_hub_app_users` and `download_hub_download_users`; add the intended members (see `docs/DEPLOY.md`).

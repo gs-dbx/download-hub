@@ -1,0 +1,57 @@
+{# _volume_rows.html — the <tr> rows ONLY for the volume browser, no <table>/<tbody>. #}
+{# Server-ordered `entries` (folders first, then files); each is a dict:              #}
+{#   kind     "folder" | "file"                                                       #}
+{#   name     display name of the entry (leaf, no path)                               #}
+{#   subpath  ROOT-RELATIVE path ("" = root); folder = drill target, file = download  #}
+{#   size     human-readable size string (files; folders show an em dash)             #}
+{#   modified human-readable timestamp (may be blank)                                 #}
+{# volume.html includes it for the initial render; GET /volume/{id}/list renders it   #}
+{# alone for fragment swaps. `can_download` gates the per-file Download action column. #}
+{% for e in entries %}
+<tr>
+  {% if e.kind == "folder" %}
+  <td>
+    <button type="button" class="app-vol-name" data-role="volume-folder"
+            data-subpath="{{ e.subpath }}" title="Open {{ e.name }}">
+      <svg class="usa-icon app-vol-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#folder"></use>
+      </svg>
+      <span>{{ e.name }}</span>
+    </button>
+  </td>
+  <td class="app-vol-size">&mdash;</td>
+  <td class="app-vol-meta">{{ e.modified }}</td>
+  {% if can_download|default(false) %}<td class="app-vol-actions"></td>{% endif %}
+  {% else %}
+  <td>
+    <span class="app-vol-file">
+      <svg class="usa-icon app-vol-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#file_present"></use>
+      </svg>
+      <span>{{ e.name }}</span>
+    </span>
+  </td>
+  <td class="app-vol-size">{{ e.size }}</td>
+  <td class="app-vol-meta">{{ e.modified }}</td>
+  {% if can_download|default(false) %}
+  <td class="app-vol-actions">
+    <button type="button" class="usa-button usa-button--outline app-vol-dl"
+            data-role="volume-file-download" aria-controls="volume-download-modal" data-open-modal
+            data-subpath="{{ e.subpath }}" data-name="{{ e.name }}">
+      <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+      </svg>
+      Download
+    </button>
+  </td>
+  {% endif %}
+  {% endif %}
+</tr>
+{% endfor %}
+{% if not entries %}
+<tr>
+  <td colspan="{{ 4 if can_download|default(false) else 3 }}" class="text-center app-vol-meta">
+    This folder is empty.
+  </td>
+</tr>
+{% endif %}

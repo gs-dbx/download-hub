@@ -1,14 +1,14 @@
-"""Pure, Spark-free synthetic-data generator for the daily metrics gold table.
+"""Pure, Spark-free synthetic-data generator for the Daily Metrics gold table.
 
 This module is the single source of truth for the metric list, ordering, and row math
-that populates the daily metrics table. It has ZERO third-party imports (stdlib
+that populates the ``daily_metrics`` gold table. It has ZERO third-party imports (stdlib
 only) so it can be unit-tested without Spark/JVM and executed inside an air-gapped
 Databricks serverless job (see LOCKED DECISION L4).
 
 Cardinality: 17 metrics x {Web, Mobile, Partner, ALL} x 6 report dates = 408 rows.
-The ``ALL`` channel is DERIVED (element-wise sum of Web+Mobile+Partner) with its ``pct_change``
-RECOMPUTED from the summed values — never averaged from the per-channel percentages
-(LOCKED DECISION L3).
+The ``ALL`` channel is DERIVED (element-wise sum of Web+Mobile+Partner) with its
+``pct_change`` RECOMPUTED from the summed values — never averaged from the per-channel
+percentages (LOCKED DECISION L3).
 """
 
 from __future__ import annotations
@@ -22,26 +22,26 @@ import random
 # ---------------------------------------------------------------------------
 
 # LOCKED DECISION L2 — canonical metric -> group -> sort_order mapping (unique 1..17,
-# PROJECT.md display order). ``base`` is a production-realistic magnitude for value_cy.
+# PROJECT.md display order). ``base`` is a realistic daily magnitude for value_cy.
 # Each entry: (metric_name, metric_group, sort_order, base_magnitude)
 METRICS: list[tuple[str, str, int, int]] = [
-    ("Visits", "traffic", 1, 2_500_000),
-    ("Unique Visitors", "traffic", 2, 1_800_000),
-    ("New Visitors", "traffic", 3, 1_200_000),
-    ("Returning Visitors", "traffic", 4, 3_000_000),
-    ("Signups", "engagement", 5, 120_000),
-    ("Logins", "engagement", 6, 80_000),
-    ("Active Sessions", "engagement", 7, 200_000),
-    ("Add to Cart", "conversion", 8, 1_920_000),
-    ("Checkouts", "conversion", 9, 1_280_000),
-    ("Orders", "conversion", 10, 3_200_000),
-    ("Revenue", "revenue", 11, 4_500_000_000),
-    ("Refunds", "revenue", 12, 900_000),
-    ("Net Revenue", "revenue", 13, 1_500_000),
-    ("Avg Order Value", "revenue", 14, 1_100_000),
-    ("Support Tickets", "other", 15, 1_800_000),
-    ("Chat Sessions", "other", 16, 1_200_000),
-    ("Email Opens", "other", 17, 2_400_000),
+    ("Visits", "traffic", 1, 1_200_000),
+    ("Unique Visitors", "traffic", 2, 800_000),
+    ("New Visitors", "traffic", 3, 300_000),
+    ("Returning Visitors", "traffic", 4, 500_000),
+    ("Signups", "engagement", 5, 45_000),
+    ("Logins", "engagement", 6, 600_000),
+    ("Active Sessions", "engagement", 7, 950_000),
+    ("Add to Cart", "conversion", 8, 180_000),
+    ("Checkouts", "conversion", 9, 90_000),
+    ("Orders", "conversion", 10, 72_000),
+    ("Revenue", "revenue", 11, 5_400_000),
+    ("Refunds", "revenue", 12, 120_000),
+    ("Net Revenue", "revenue", 13, 5_280_000),
+    ("Avg Order Value", "revenue", 14, 75),
+    ("Support Tickets", "other", 15, 8_500),
+    ("Chat Sessions", "other", 16, 22_000),
+    ("Email Opens", "other", 17, 260_000),
 ]
 
 # LOCKED DECISION L1 — six fixed early-2026 business days, all at 00:00:00. No date is
@@ -63,7 +63,7 @@ CHANNEL_ALL: str = "ALL"
 # A single metric whose prior-year value is zero on the first report date, so the
 # value_py == 0 -> NULL pct_change branch is deterministically exercised (both the
 # per-channel rows and the derived ALL row for that date).
-_ZERO_PY_METRIC: str = "Logins"
+_ZERO_PY_METRIC: str = "New Visitors"
 
 
 def pct_change(value_cy: int, value_py: int) -> float | None:
@@ -108,9 +108,9 @@ def _build_channel_rows(
 ) -> list[dict]:
     """Build the Web/Mobile/Partner rows (the real, drawn channels).
 
-    For each (report_date, channel in Web/Mobile/Partner, metric): draw a deterministic ``value_cy``
-    around the metric's base magnitude, derive ``value_py`` via a per-draw ratio that
-    keeps ``pct_change`` in a realistic band (roughly -15%..+25%), and compute
+    For each (report_date, channel in Web/Mobile/Partner, metric): draw a deterministic
+    ``value_cy`` around the metric's base magnitude, derive ``value_py`` via a per-draw
+    ratio that keeps ``pct_change`` in a realistic band (roughly -15%..+25%), and compute
     ``pct_change``. The designated zero-prior-year metric is forced to ``value_py == 0``
     on the first report date to exercise the NULL branch.
 

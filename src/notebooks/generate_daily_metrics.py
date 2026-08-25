@@ -125,6 +125,34 @@ spark.sql(
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 4b. Create the admin change-audit table (empty, idempotent)
+# MAGIC
+# MAGIC Tracks all admin mutations (report/view/config upserts) for compliance
+# MAGIC and analytics. ``CREATE TABLE IF NOT EXISTS ... USING DELTA`` so reruns
+# MAGIC never clobber app-written rows. The app writes rows as the service principal.
+
+# COMMAND ----------
+
+config_audit_fqn = f"{schema_fqn}.config_audit"
+spark.sql(
+    f"""
+    CREATE TABLE IF NOT EXISTS {config_audit_fqn} (
+      audit_id STRING,
+      event_ts TIMESTAMP,
+      actor_email STRING,
+      entity_type STRING,
+      entity_key STRING,
+      action STRING,
+      summary STRING,
+      payload_json STRING,
+      app_version STRING
+    ) USING DELTA
+    """
+)
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### 4a. Migrate pre-existing audit tables (idempotent)
 # MAGIC
 # MAGIC For installs created before Phase 8 the audit table has only 11 columns.
@@ -260,6 +288,8 @@ spark.sql(
       enabled        BOOLEAN,
       download_group STRING,
       view_key       STRING,
+      kind           STRING,
+      volume_root    STRING,
       updated_at     TIMESTAMP,
       updated_by     STRING
     ) USING DELTA
@@ -315,6 +345,16 @@ for _newcol in ("view_key", "updated_by"):
     if _newcol not in _config_cols:
         spark.sql(f"ALTER TABLE {config_fqn} ADD COLUMNS ({_newcol} STRING)")
         print(f"added report_config column: {_newcol}")
+# Volume reports (kind == 'volume', volume_root = pinned /Volumes root). Existing
+# rows are query reports, so default kind to 'query' where NULL. source_query is
+# already nullable (STRING, no constraint) so volume rows can carry NULL there.
+if "kind" not in _config_cols:
+    spark.sql(f"ALTER TABLE {config_fqn} ADD COLUMNS (kind STRING)")
+    spark.sql(f"UPDATE {config_fqn} SET kind = 'query' WHERE kind IS NULL")
+    print("added report_config column: kind (existing rows defaulted to 'query')")
+if "volume_root" not in _config_cols:
+    spark.sql(f"ALTER TABLE {config_fqn} ADD COLUMNS (volume_root STRING)")
+    print("added report_config column: volume_root")
 
 # Seed a default view for report #1. `view_key` is a Databricks group name — add
 # your app users to it (and to `<view_key>_dl` for download) so they see the tab.
@@ -355,6 +395,8 @@ seed_schema = StructType(
         StructField("enabled", BooleanType(), False),
         StructField("download_group", StringType(), True),
         StructField("view_key", StringType(), True),
+        StructField("kind", StringType(), True),
+        StructField("volume_root", StringType(), True),
     ]
 )
 
@@ -371,6 +413,8 @@ seed_rows = [
         "enabled": True,
         "download_group": None,  # None -> derived from view_key + suffix (_dl).
         "view_key": default_view_key,  # the default view's Databricks group
+        "kind": "query",  # a query report (volume reports set kind='volume')
+        "volume_root": None,
     }
 ]
 
@@ -390,6 +434,76 @@ src_df = (
     .whenNotMatchedInsertAll()
     .execute()
 )
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7b. Demo VOLUME report (browse + gated download of a UC volume)
+# MAGIC
+# MAGIC Creates a managed volume `sample_docs`, drops a couple of sample files (incl. a
+# MAGIC subfolder to show traversal), seeds a `kind='volume'` report pointing at it, and
+# MAGIC grants the app groups READ VOLUME (browsing + download run OBO as the user).
+# MAGIC Best-effort: a write/permission hiccup here won't fail the whole seed.
+
+# COMMAND ----------
+
+sample_vol_fqn = f"{schema_fqn}.sample_docs"
+sample_vol_path = f"/Volumes/{catalog}/{schema}/sample_docs"
+try:
+    spark.sql(f"CREATE VOLUME IF NOT EXISTS {sample_vol_fqn}")
+    os.makedirs(f"{sample_vol_path}/reports", exist_ok=True)
+    _demo_files = {
+        f"{sample_vol_path}/README.txt": "Sample documents volume for the Download Hub demo.\n",
+        f"{sample_vol_path}/overview.csv": "metric,value\nvisits,1200000\norders,72000\n",
+        f"{sample_vol_path}/reports/q1_summary.txt": "Q1 summary placeholder.\n",
+    }
+    for _fp, _content in _demo_files.items():
+        with open(_fp, "w") as _fh:
+            _fh.write(_content)
+    print(f"seeded demo volume {sample_vol_fqn} with {len(_demo_files)} files")
+
+    # READ VOLUME lets the app (as the signed-in user, OBO) list + download files.
+    for _grp in (default_view_key, f"{default_view_key}_dl"):
+        spark.sql(f"GRANT READ VOLUME ON VOLUME {sample_vol_fqn} TO `{_grp}`")
+    print(f"granted READ VOLUME on {sample_vol_fqn} to view + download groups")
+
+    # Seed the volume report row (kind='volume'; source_query/date/columns/filters
+    # are NULL/empty for a volume report). Explicit-column MERGE since its shape
+    # differs from the query-report seed schema above.
+    spark.sql(
+        f"""
+        MERGE INTO {config_fqn} t
+        USING (SELECT 'sample_docs' AS report_id) s ON t.report_id = s.report_id
+        WHEN NOT MATCHED THEN INSERT
+          (report_id, title, source_query, date_field, columns_json, filters_json,
+           order_by, display_order, enabled, download_group, view_key, kind,
+           volume_root, updated_at, updated_by)
+        VALUES
+          ('sample_docs', 'Sample Documents', NULL, NULL, NULL, NULL, NULL, 2, true,
+           NULL, '{default_view_key}', 'volume', '{sample_vol_path}',
+           current_timestamp(), 'seed')
+        """
+    )
+    print(f"seeded volume report 'sample_docs' -> {sample_vol_path}")
+except Exception as _exc:  # noqa: BLE001 - demo seed is best-effort
+    print(f"demo volume seed skipped ({type(_exc).__name__}: {_exc})")
+
+# Exports spill volume — over-cap query exports are written here (as the user,
+# OBO) and retrieved via the app. Set the app's APP_EXPORT_VOLUME env to this
+# path to enable the feature. Download-group members need WRITE + READ VOLUME.
+# Best-effort so a permission hiccup won't fail the seed.
+exports_vol_fqn = f"{schema_fqn}.exports"
+try:
+    spark.sql(f"CREATE VOLUME IF NOT EXISTS {exports_vol_fqn}")
+    for _grp in (f"{default_view_key}_dl", default_view_key):
+        spark.sql(f"GRANT WRITE VOLUME ON VOLUME {exports_vol_fqn} TO `{_grp}`")
+        spark.sql(f"GRANT READ VOLUME ON VOLUME {exports_vol_fqn} TO `{_grp}`")
+    print(
+        f"created exports volume {exports_vol_fqn} (+ WRITE/READ grants); set "
+        f"APP_EXPORT_VOLUME=/Volumes/{catalog}/{schema}/exports to enable over-cap spill"
+    )
+except Exception as _exc:  # noqa: BLE001 - best-effort
+    print(f"exports volume seed skipped ({type(_exc).__name__}: {_exc})")
 
 # COMMAND ----------
 

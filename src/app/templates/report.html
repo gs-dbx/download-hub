@@ -25,23 +25,19 @@
         <input class="usa-input" id="report-search" type="search"
                data-role="report-search" placeholder="Filter results" autocomplete="off">
       </div>
-      {% if report.date_field %}
       <div class="app-field app-field--date">
         <label class="usa-label" for="report-date">Report date</label>
         <select class="usa-select" id="report-date" data-role="report-date">
-          <option value=""{% if not selected_date %} selected{% endif %}>All dates</option>
           {% for rd in dates %}
           <option value="{{ rd }}"{% if rd == selected_date %} selected{% endif %}>{{ rd }}</option>
           {% endfor %}
         </select>
       </div>
-      {% endif %}
       {% for f in report.filters %}
       <div class="app-field app-field--filter">
         <label class="usa-label" for="report-filter-{{ f.field }}">{{ f.label }}</label>
         <select class="usa-select" id="report-filter-{{ f.field }}"
                 data-role="report-filter" data-field="{{ f.field }}">
-          <option value=""{% if not selected_filters[f.field] %} selected{% endif %}>All</option>
           {% for opt in filter_options[f.field] %}
           <option value="{{ opt }}"{% if opt == selected_filters[f.field] %} selected{% endif %}>{{ opt }}</option>
           {% endfor %}
@@ -76,10 +72,26 @@
     {% endif %}
   </div>
 
+  {# Table header strip: a subtle "SQL" button (query reports only) that opens a
+     modal showing the effective query for the CURRENT view — fetched live from
+     /report/{id}/sql with the active date + filters + sort applied. #}
+  {% if report.source_query %}
+  <div class="app-tablehead">
+    <button type="button" class="usa-button usa-button--outline usa-button--small app-sqlbtn"
+            data-role="report-sql-btn">
+      <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+        <use xlink:href="/static/uswds/img/sprite.svg#code"></use>
+      </svg>
+      SQL
+    </button>
+  </div>
+  {% endif %}
+
   {#
     The table sits in a positioned wrapper so app.js can overlay a loading
     spinner (data-role="report-spinner") during fragment reloads and downloads.
-    aria-busy is toggled by app.js for assistive tech.
+    aria-busy is toggled by app.js for assistive tech. Each header is a button
+    (data-role="sort-header") so clicking sorts server-side over the snapshot.
   #}
   <div class="app-table-wrap" data-role="report-table-wrap">
     <div class="app-spinner" data-role="report-spinner" hidden aria-hidden="true">
@@ -87,11 +99,16 @@
     </div>
     <table class="usa-table usa-table--striped usa-table--borderless width-full"
            data-role="report-table">
-      <caption class="usa-sr-only">{{ report.title }}{% if selected_date %} for {{ selected_date }}{% endif %}</caption>
+      <caption class="usa-sr-only">{{ report.title }} for {{ selected_date }}</caption>
       <thead>
         <tr>
           {% for h in columns %}
-          <th scope="col" class="{{ h.align }}">{{ h.label }}</th>
+          <th scope="col" class="{{ h.align }} app-th-sort" data-sort-key="{{ h.name }}" aria-sort="none">
+            <button type="button" class="app-sort-btn" data-role="sort-header"
+                    data-sort-key="{{ h.name }}" title="Sort by {{ h.label }}">
+              <span class="app-sort-label">{{ h.label }}</span><span class="app-sort-ind" aria-hidden="true"></span>
+            </button>
+          </th>
           {% endfor %}
         </tr>
       </thead>
@@ -101,17 +118,12 @@
     </table>
   </div>
 
-  {% if notice %}
-  <div class="usa-alert usa-alert--warning usa-alert--slim margin-top-2" data-role="report-notice" role="alert">
-    <div class="usa-alert__body">
-      <p class="usa-alert__text">{{ notice }}</p>
-    </div>
-  </div>
-  {% elif not rows %}
+  {% if not rows %}
   <div class="usa-alert usa-alert--info usa-alert--slim margin-top-2" data-role="report-empty">
     <div class="usa-alert__body">
       <p class="usa-alert__text">
-        No rows match the current filters.
+        No data to display &mdash; you may not have access to this report, or no
+        rows match the current filters.
       </p>
     </div>
   </div>
@@ -127,6 +139,36 @@
 
   {% if can_download %}
   {% include "_download.html" %}
+  {% endif %}
+
+  {# SQL modal (query reports) — a SELF-CONTROLLED overlay (NOT a USWDS modal):
+     app.js reveals it by removing [hidden] and fills the textarea from
+     /report/{id}/sql with the current view's params, so it reflects live
+     filters. Readonly textarea → copyable despite the page copy/paste
+     deterrent. Backdrop click / close button / Escape all dismiss it. #}
+  {% if report.source_query %}
+  <div class="app-sqlmodal" data-role="report-sql-modal" hidden>
+    <div class="app-sqlmodal__panel" role="dialog" aria-modal="true"
+         aria-labelledby="report-sql-heading">
+      <div class="app-sqlmodal__head">
+        <h2 id="report-sql-heading" class="app-sqlmodal__title">Query for this view</h2>
+        <button type="button" class="app-sqlmodal__close" data-role="report-sql-close"
+                aria-label="Close">
+          <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+            <use xlink:href="/static/uswds/img/sprite.svg#close"></use>
+          </svg>
+        </button>
+      </div>
+      <p class="font-body-3xs text-base margin-top-0">
+        The effective query for what's on screen (date + filters + sort applied).
+        Filtering/search also runs in-app over the cached results.
+      </p>
+      <label class="usa-sr-only" for="report-sql-text">SQL query for this view</label>
+      <textarea class="app-sql__text" id="report-sql-text" data-role="report-sql-text"
+                readonly rows="12" spellcheck="false"
+                aria-label="SQL query for this view">Loading…</textarea>
+    </div>
+  </div>
   {% endif %}
 </div>
 {% endblock %}

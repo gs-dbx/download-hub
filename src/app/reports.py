@@ -649,6 +649,202 @@ def build_distinct_values_query(
     return sql, params
 
 
+# Outer alias wrapping the inner report query for server-side paging. Bare
+# identifier; never user-set.
+_PAGE_ALIAS = "_p"
+
+
+def build_columns_probe_query(source_query: str) -> str:
+    """Build a zero-row probe that returns ONLY the result column metadata.
+
+    Used for ``SELECT *`` reports (no configured ``columns_json``) to learn the
+    output column names BEFORE building search/sort over them — the Statement
+    Execution API returns the schema even for an empty result. No bound params.
+
+    Args:
+        source_query: The report's full SELECT (wrapped as a subquery).
+
+    Returns:
+        ``"SELECT * FROM ( <source_query> ) AS _q LIMIT 0"``.
+
+    Raises:
+        ValueError: If ``source_query`` is invalid.
+    """
+    return f"SELECT * FROM {_wrapped_source(source_query)} LIMIT 0"
+
+
+def _coerce_limit_offset(limit: int, offset: int) -> tuple[int, int]:
+    """Clamp a page LIMIT/OFFSET to safe integer bounds.
+
+    LIMIT/OFFSET are app-controlled integers (page size from a fixed allowlist,
+    offset = page*size), NOT user strings — so once coerced to ``int`` they are
+    interpolated directly (Databricks SQL does not bind LIMIT/OFFSET markers).
+
+    Args:
+        limit: Requested row limit.
+        offset: Requested row offset.
+
+    Returns:
+        ``(limit, offset)`` clamped to ``limit in [1, 1_000_000]`` and
+        ``offset >= 0``.
+    """
+    lim = max(1, min(int(limit), 1_000_000))
+    off = max(0, int(offset))
+    return lim, off
+
+
+def _search_predicate(
+    search: str | None, search_columns: list[str] | None, params: list[dict]
+) -> tuple[str | None, list[dict]]:
+    """Build a case-insensitive OR'd LIKE predicate over ``search_columns``.
+
+    The term is bound (``:q_search``) as ``%<lowered term>%`` — never
+    interpolated; each column is validated and cast to STRING. ``%``/``_`` in the
+    term act as SQL wildcards (documented UX; still injection-safe since bound).
+
+    Args:
+        search: The raw search term (``None``/blank => no predicate).
+        search_columns: Output column names to search across.
+        params: The running bound-param list to append to.
+
+    Returns:
+        ``(predicate_or_none, params)`` — ``predicate`` is a parenthesized
+        ``lower(CAST(c AS STRING)) LIKE :q_search OR ...`` clause, or ``None``.
+    """
+    term = (search or "").strip()
+    if not term or not search_columns:
+        return None, params
+    cols = [validate_identifier(c) for c in search_columns]
+    ors = " OR ".join(
+        f"lower(CAST({c} AS STRING)) LIKE :q_search" for c in cols
+    )
+    params = params + [
+        {"name": "q_search", "value": f"%{term.lower()}%", "type": "STRING"}
+    ]
+    return f"({ors})", params
+
+
+def build_report_page_query(
+    source_query: str,
+    columns: list[str] | None = None,
+    date_field: str | None = None,
+    report_date: str | None = None,
+    filters: dict[str, str] | None = None,
+    aggregates: list[dict] | None = None,
+    order_by: str | None = None,
+    sort_key: str | None = None,
+    sort_dir: str = "asc",
+    search: str | None = None,
+    search_columns: list[str] | None = None,
+    numeric_sort: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[str, list[dict]]:
+    """Build the SQL for ONE page of a report (server-side paging).
+
+    Wraps the fully-validated report query (:func:`build_report_query` — date
+    scope, filter equality, aggregation/GROUP BY) as an inner subquery, then
+    layers the interactive controls on the OUTER query:
+
+        SELECT * FROM ( <inner report query> ) AS _p
+        [WHERE <search predicate>]
+        [ORDER BY <sort> ASC|DESC]
+        LIMIT <n> OFFSET <m>
+
+    Injection-safety: filter/date VALUES are bound inside the inner query; the
+    search term is bound (``:q_search``); every identifier (sort key, search
+    columns, inner columns/filters) is allowlist-validated; LIMIT/OFFSET are
+    clamped integers interpolated directly (not user strings). A numeric sort
+    orders by ``TRY_CAST(<col> AS DOUBLE)`` so numeric columns sort by value (and
+    non-numeric cells sort as NULL rather than erroring).
+
+    Args:
+        source_query: The report's full SELECT.
+        columns: Plain (non-agg) column names to select; empty => ``*``.
+        date_field / report_date: Optional date scope (bound VALUE).
+        filters: ``field -> value`` equality filters (bound VALUES).
+        aggregates: Optional aggregate specs (see :func:`split_columns`).
+        order_by: The report's configured default sort column.
+        sort_key: The clicked sort column (overrides ``order_by`` when set).
+        sort_dir: ``"asc"`` (default) or ``"desc"``.
+        search: Optional free-text search term (bound).
+        search_columns: Output column names the search spans.
+        numeric_sort: Sort the effective sort column by numeric value.
+        limit / offset: Page size and offset (clamped ints).
+
+    Returns:
+        ``(sql, params)`` — ``params`` a list of ``{"name","value","type"}`` dicts.
+
+    Raises:
+        ValueError: If any identifier or the source query is invalid.
+    """
+    inner_sql, params = build_report_query(
+        source_query,
+        columns=columns,
+        date_field=date_field,
+        report_date=report_date,
+        filters=filters,
+        order_by=None,  # ordering is applied on the OUTER query
+        aggregates=aggregates,
+    )
+    sql = f"SELECT * FROM ( {inner_sql} ) AS {_PAGE_ALIAS}"
+    predicate, params = _search_predicate(search, search_columns, params)
+    if predicate:
+        sql += f" WHERE {predicate}"
+    effective_sort = sort_key or order_by
+    if effective_sort:
+        col = validate_identifier(effective_sort)
+        direction = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
+        expr = f"TRY_CAST({col} AS DOUBLE)" if numeric_sort else col
+        sql += f" ORDER BY {expr} {direction}"
+    lim, off = _coerce_limit_offset(limit, offset)
+    sql += f" LIMIT {lim} OFFSET {off}"
+    return sql, params
+
+
+def build_report_count_query(
+    source_query: str,
+    columns: list[str] | None = None,
+    date_field: str | None = None,
+    report_date: str | None = None,
+    filters: dict[str, str] | None = None,
+    aggregates: list[dict] | None = None,
+    search: str | None = None,
+    search_columns: list[str] | None = None,
+) -> tuple[str, list[dict]]:
+    """Build the ``COUNT(*)`` for a report's current filter+search selection.
+
+    Same inner report query as :func:`build_report_page_query` (so the count
+    matches the paged rows exactly), wrapped and counted — for an aggregated
+    report this counts GROUPS, matching what the pager shows. No ORDER BY / no
+    LIMIT.
+
+    Args:
+        source_query, columns, date_field, report_date, filters, aggregates,
+        search, search_columns: As in :func:`build_report_page_query`.
+
+    Returns:
+        ``(sql, params)`` — ``SELECT COUNT(*) FROM ( <inner> ) AS _p [WHERE ...]``.
+
+    Raises:
+        ValueError: If any identifier or the source query is invalid.
+    """
+    inner_sql, params = build_report_query(
+        source_query,
+        columns=columns,
+        date_field=date_field,
+        report_date=report_date,
+        filters=filters,
+        order_by=None,
+        aggregates=aggregates,
+    )
+    sql = f"SELECT COUNT(*) FROM ( {inner_sql} ) AS {_PAGE_ALIAS}"
+    predicate, params = _search_predicate(search, search_columns, params)
+    if predicate:
+        sql += f" WHERE {predicate}"
+    return sql, params
+
+
 def build_report_config_query(catalog: str, schema: str) -> str:
     """Build the fixed-identifier SELECT of the enabled report registry.
 

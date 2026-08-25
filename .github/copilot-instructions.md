@@ -5,7 +5,7 @@
 The **Data Download Hub** is a configurable, server-rendered FastAPI application that serves reports from any SQL table via a clean, search-friendly web UI with per-user downloads gated by Databricks group membership.
 
 - **100% config-driven.** New reports are added by inserting rows into the `report_config` registry table — zero code change or redeploy required.
-- **Per-user cached snapshots.** Filters, search, and pagination run server-side over a date-scoped in-memory snapshot (OBO as the signed-in user).
+- **Server-side SQL paging.** Filters, search, sort, and pagination are pushed into SQL and run OBO (a `COUNT(*)` + one `LIMIT`/`OFFSET` page per request) — no whole result set is ever held in the app.
 - **Audit-first downloads.** Every download writes exactly one audit row *before* the file is returned; if the audit fails, the download is blocked.
 - **Fully air-gapped.** All dependencies and assets ship committed in `src/app/wheelhouse/` and `static/`; no CDN, no external URLs.
 
@@ -17,24 +17,23 @@ The **Data Download Hub** is a configurable, server-rendered FastAPI application
 2. Extract OBO token from `X-Forwarded-Access-Token` header
 3. For data reads: build a per-request `WorkspaceClient` with `auth_type="pat"` and read AS THE USER via Statement Execution API
 4. For registry reads: use a cached (TTL ~300s) service-principal client
-5. Per-user snapshot cache: select display + filter columns, date-scoped, cache by (user_email, report_id, date)
-6. Apply filters/search/pagination server-side over the cached snapshot
-7. Render `report.html` full page or `_rows.html` fragment (HTMX-driven table updates)
-8. Download: re-check group membership (defense in depth), validate form, export ALL matching rows from cache, write audit row (as SP), return file
+5. Server-side SQL paging: build a `COUNT(*)` + one `LIMIT`/`OFFSET` page with the active date/filters/search/sort pushed into SQL, run AS THE USER (`_query_report_page`); filter dropdown options come from a distinct-values query (`_report_filter_options`)
+6. Render `report.html` full page or `_rows.html` fragment (JS-driven table updates)
+7. Download: re-check group membership (defense in depth), validate form, run the same filtered/searched query bounded by the spill cap, write audit row (as SP), return file
 
 ### Module map — pure vs. I/O boundary
 
 **`src/app/main.py`** — the ONLY I/O boundary (AsyncIO, SDK calls, Jinja templates, app.mount, routes)
 - `index()` → redirect to first report
-- `report_page()` → full page render (OBO token extract, snapshot read, filter defaults)
-- `report_table()` → fragment render (filter/search/paginate apply, header injection)
+- `report_page()` → full page render (OBO token extract, COUNT + first page via SQL, filter options)
+- `report_table()` → fragment render (COUNT + one LIMIT/OFFSET page via SQL for the active filters/search/sort)
 - `download()` → export (group re-check, form validate, file build, audit write, response)
 - `_run_sql()` / `_run_sql_sp_query()` / `_run_sql_sp()` → wrapped SDK calls with `asyncio.to_thread`
 
 **Pure modules** (no SDK, no async, fully unit-testable in pytest alone):
 - `config.py` — app branding helpers (`app_name`, `app_logo`, `app_org_name`, `resolve_disclaimer`); kill-switch parser (`downloads_enabled`)
 - `auth.py` — token/email extraction, group membership check, effective-group resolution
-- `cache.py` — in-memory LRU snapshot cache, `SnapshotCache.get/put`; filter/search/paginate logic; distinct-value extraction
+- `cache.py` — pure helpers + a small `BoundedTTLCache` (used for identity/display lookups). NOTE: the display data path no longer uses an in-memory snapshot — `apply_filters`/`apply_search`/`paginate`/`SnapshotCache` remain here as tested utilities but are not the runtime read path
 - `reports.py` — `ReportConfig` dataclass, parse/build generic query builders, injection validation (identifier allowlist regex)
 - `exports.py` — CSV/XLSX builders, disclaimer embedding, filename generation
 - `render.py` — display-column cell formatters, header builder, haystack concatenation for search
@@ -43,8 +42,9 @@ The **Data Download Hub** is a configurable, server-rendered FastAPI application
 
 ### Caching model
 
-- **Per-user snapshot:** bounded LRU (max 128 entries). Key = (user_email, report_id, date). Evicted on `refresh=1` query param or cache-key pressure.
+- **Display reads:** NOT cached — the interactive path issues a `COUNT(*)` + one `LIMIT`/`OFFSET` page per interaction (server-side SQL paging), so nothing large is materialized. `refresh=1` simply re-runs the query.
 - **Report registry:** in-process TTL tuple. Refreshed at most every 300 seconds. Admin can force immediate refresh by restarting the app.
+- **Identity display:** `BoundedTTLCache` maps SCIM ids → email for the audit/change-log tabs (bounded, TTL-expiring).
 
 ### Auth model
 
@@ -160,7 +160,7 @@ The app picks it up within ~5 minutes (TTL refresh). Restart to pick it up immed
 ]
 ```
 
-- `field` — source column to filter on (MUST be projectable — it's included in the snapshot SELECT)
+- `field` — source column to filter on (must exist in the report's query output; it's bound into the SQL `WHERE`, and its distinct values populate the dropdown)
 - `label` — dropdown label
 
 **Important:** Every filter field MUST exist on `source_fqn` or the OBO read will fail.
@@ -231,7 +231,7 @@ cd download_hub
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
 
-Current baseline: 146 passed, 1 skipped. Every code change must maintain or improve this. The branding guard test ensures no external URLs leak into committed templates/CSS/JS.
+Current baseline: 323 passed, 1 skipped. Every code change must maintain or improve this. The branding guard test ensures no external URLs leak into committed templates/CSS/JS.
 
 ## Gotchas
 
@@ -239,9 +239,9 @@ Current baseline: 146 passed, 1 skipped. Every code change must maintain or impr
 
 2. **OBO token pinning: `auth_type="pat"` is mandatory.** The Apps runtime injects both the user's OAuth token (in the header) AND the app SP's credentials (in the environment). Without `auth_type="pat"`, the SDK sees both and refuses to initialize. Pinning `pat` forces the user's token to win, giving you OBO.
 
-3. **Per-user snapshot cache is keyed by email.** If user emails change or are mutable, the cache can return stale data for a different user. The app assumes emails are stable within a session.
+3. **Server-side SQL paging — no display cache.** Each interaction runs a `COUNT(*)` + one `LIMIT`/`OFFSET` page in SQL as the user, so a huge report never materializes. Deep pages pay `OFFSET` rescans (keyset pagination is a future optimization) and `ORDER BY` needs a unique tiebreaker for perfectly stable page boundaries.
 
-4. **Filter fields must exist on the source table.** The snapshot SELECT projects display columns ∪ filter fields. If a filter field doesn't exist on `source_fqn`, the OBO read fails with "column not found".
+4. **Filter/search/sort must reference real output columns.** Filters bind into the SQL `WHERE`, search spans the displayed text columns, and sort orders by the clicked column — all identifiers are allowlist-validated. If a filter field isn't in the report's query output, the OBO read fails with "column not found".
 
 5. **Every identifier is validated; bad config raises ValueError at query-build time, not runtime.** A typo in `source_fqn`, `date_field`, column names, or filter fields is caught early by the regex validator, which is good — no silent NULL results.
 

@@ -24,8 +24,11 @@ from app.reports import (
     build_config_audit_insert,
     build_config_audit_query,
     build_config_audit_row,
+    build_columns_probe_query,
     build_distinct_values_query,
     build_preview_query,
+    build_report_count_query,
+    build_report_page_query,
     build_report_config_delete,
     build_report_config_query,
     build_report_config_upsert,
@@ -1088,3 +1091,109 @@ def test_build_report_view_delete_validates():
         build_report_view_delete("main", "", "v")
     with pytest.raises(ValueError):
         build_report_view_delete("main", "default", "bad; DROP")
+
+
+# --- server-side paging builders (build_report_page_query / count / probe) ---
+
+_PSRC = "SELECT report_date, region, amount FROM cat.sch.tbl"
+
+
+def _pnames(params):
+    return [p["name"] for p in params]
+
+
+def test_page_query_shape_limit_offset_and_star():
+    sql, params = build_report_page_query(_PSRC, limit=25, offset=50)
+    # Wraps the inner report query as a subquery, selects *, paginates.
+    assert "SELECT * FROM ( SELECT * FROM ( " + _PSRC in sql
+    assert sql.rstrip().endswith("LIMIT 25 OFFSET 50")
+    assert params == []  # no filters/date/search
+
+
+def test_page_query_limit_offset_are_clamped_ints_not_bound():
+    # LIMIT/OFFSET are interpolated integers (Databricks doesn't bind them), and
+    # are coerced so a huge/negative value can't produce unbounded/invalid SQL.
+    sql, _ = build_report_page_query(_PSRC, limit=10**9, offset=-5)
+    assert "LIMIT 1000000 OFFSET 0" in sql
+    # Non-int-ish input must raise rather than interpolate arbitrary text.
+    with pytest.raises((ValueError, TypeError)):
+        build_report_page_query(_PSRC, limit="25; DROP TABLE x", offset=0)
+
+
+def test_page_query_filters_and_date_are_bound_in_inner():
+    sql, params = build_report_page_query(
+        _PSRC, date_field="report_date", report_date="2026-01-01",
+        filters={"region": "NE"}, limit=50, offset=0,
+    )
+    names = _pnames(params)
+    assert "report_date" in names and "flt_region" in names
+    # Values are bound, never interpolated.
+    assert "NE" not in sql and "2026-01-01" not in sql
+    assert ":report_date" in sql and ":flt_region" in sql
+
+
+def test_page_query_search_is_bound_and_ors_columns():
+    sql, params = build_report_page_query(
+        _PSRC, search="Ne'w", search_columns=["region", "amount"], limit=50, offset=0,
+    )
+    # One bound search param, OR'd, case-insensitive, cast to string.
+    assert ":q_search" in sql and sql.count(":q_search") == 2
+    assert "lower(CAST(region AS STRING)) LIKE :q_search" in sql
+    assert " OR " in sql and "WHERE (" in sql
+    qp = [p for p in params if p["name"] == "q_search"][0]
+    assert qp["value"] == "%ne'w%"  # lowered, wrapped; raw value bound (no injection)
+    assert "Ne'w" not in sql
+
+
+def test_page_query_blank_search_adds_no_predicate():
+    sql, params = build_report_page_query(_PSRC, search="   ", search_columns=["region"])
+    assert ":q_search" not in sql and "WHERE" not in sql
+    assert params == []
+
+
+def test_page_query_sort_key_overrides_order_by_with_direction():
+    sql, _ = build_report_page_query(_PSRC, order_by="region", sort_key="amount", sort_dir="desc")
+    assert "ORDER BY amount DESC" in sql
+    # falls back to configured order_by when no sort_key
+    sql2, _ = build_report_page_query(_PSRC, order_by="region")
+    assert "ORDER BY region ASC" in sql2
+
+
+def test_page_query_numeric_sort_uses_try_cast():
+    sql, _ = build_report_page_query(_PSRC, sort_key="amount", numeric_sort=True)
+    assert "ORDER BY TRY_CAST(amount AS DOUBLE) ASC" in sql
+    sql2, _ = build_report_page_query(_PSRC, sort_key="region", numeric_sort=False)
+    assert "ORDER BY region ASC" in sql2
+
+
+def test_page_query_rejects_bad_identifiers():
+    with pytest.raises(ValueError):
+        build_report_page_query(_PSRC, sort_key="amount; DROP TABLE x")
+    with pytest.raises(ValueError):
+        build_report_page_query(_PSRC, search="x", search_columns=["a b"])
+    with pytest.raises(ValueError):
+        build_report_page_query(_PSRC, filters={"1bad": "v"})
+
+
+def test_count_query_matches_filters_and_search():
+    sql, params = build_report_count_query(
+        _PSRC, filters={"region": "NE"}, search="acme", search_columns=["region"],
+    )
+    assert sql.startswith("SELECT COUNT(*) FROM ( SELECT * FROM ( " + _PSRC)
+    assert ":flt_region" in sql and ":q_search" in sql
+    assert "ORDER BY" not in sql and "LIMIT" not in sql
+    assert {"flt_region", "q_search"} <= set(_pnames(params))
+
+
+def test_count_query_wraps_aggregate_so_it_counts_groups():
+    aggs = [{"func": "sum", "source": "amount", "output": "total"}]
+    sql, _ = build_report_count_query(_PSRC, columns=["region"], aggregates=aggs)
+    assert "GROUP BY region" in sql
+    assert sql.startswith("SELECT COUNT(*) FROM (")
+
+
+def test_columns_probe_is_zero_row_select_star():
+    sql = build_columns_probe_query(_PSRC)
+    assert sql == "SELECT * FROM ( " + _PSRC + " ) AS _q LIMIT 0"
+    with pytest.raises(ValueError):
+        build_columns_probe_query("SELECT 1; DROP TABLE x")

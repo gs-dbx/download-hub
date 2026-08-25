@@ -9,7 +9,7 @@ A **configurable, server-rendered SQL report download app** with per-user filter
 - **Config-driven tabs.** Each enabled row in `{APP_CATALOG}.{APP_SCHEMA}.report_config` becomes a report tab. The report's columns, filters, query/volume source, date field, and display order are all defined by config — no code change needed.
 - **Two report kinds.** A `query` report renders a SQL `SELECT` as a filterable table; a `volume` report browses a pinned Unity Catalog **Volume** (folders + subfolders, breadcrumbs) with metadata + gated file download. Both read on-behalf-of-user.
 - **Aggregations & formats.** Columns can apply `Sum/Min/Avg/Max/First/Last` (injected as `AGG(source)` with a join-safe `GROUP BY`), and render as `int`, `float`/`double`, `pct`, or `text`.
-- **Fast server-side filtering, search & sort.** Per-user cached snapshots (dated, scoped by Unity Catalog access) are filtered, searched, click-to-sorted, and paginated server-side. Every interaction fetches a fresh HTML fragment; filter/sort state is deep-linkable in the URL.
+- **Server-side SQL paging.** Filters, search, click-to-sort, and pagination are all pushed into SQL and run on-behalf-of-user: each interaction issues a `COUNT(*)` (pager total) plus one `LIMIT`/`OFFSET` page, so even a multi-million-row report never materializes in the app. Every interaction fetches a fresh HTML fragment; filter/sort state is deep-linkable in the URL.
 - **Gated audited downloads.** Members of a report's download group can export the current filtered view (CSV or XLSX) with a required data-handling acknowledgement and justification. Every download writes one audit row to `{APP_CATALOG}.{APP_SCHEMA}.download_audit` before the file is returned — if the audit fails, the download is blocked.
 - **Admin console.** Members of `ADMIN_GROUP` manage reports/views at `/admin` (query preview, column builder with per-column aggregation, add/**delete** reports, disclaimer, audit log). Each report page can reveal the exact SQL it runs ("View SQL").
 - **On-behalf-of-user (OBO) reads.** Each user's queries run AS THAT USER on the bound SQL warehouse; Unity Catalog enforces their own data access. No fallback, no mock data, no privilege escalation.
@@ -46,7 +46,7 @@ resources/              Databricks Asset Bundle resources
   grants.sql            Unity Catalog grants
 
 databricks.yml          Databricks Asset Bundle manifest (catalog, schema, warehouse, groups)
-tests/                  pytest unit tests (pure functions, no SDK required, 298 passed)
+tests/                  pytest unit tests (pure functions, no SDK required, 323 passed)
 docs/
   ARCHITECTURE.md       Request flow, module map, caching, auth model
   CONFIGURATION.md      Environment variables, report_config schema, worked example
@@ -67,7 +67,7 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Expected: 298 passed, 1 skipped.
+Expected: 323 passed, 1 skipped.
 
 ### 2. Deploy to Databricks Apps
 
@@ -184,7 +184,7 @@ See `docs/REPORTS.md` and `docs/CONFIGURATION.md` for the `report_config` schema
 
 1. **OBO reads as the user.** Every data read runs as the signed-in user; Unity Catalog enforces access. No privilege escalation.
 2. **Audit-first.** Downloads require a successful audit write to the warehouse before the file is returned.
-3. **Per-user cached snapshots.** All filters, search, and pagination run server-side over an in-memory snapshot cached by (user_email, report_id, date).
+3. **Server-side SQL paging.** Filters, search, sort, and pagination are pushed into SQL (a `COUNT(*)` + one `LIMIT`/`OFFSET` page per request, run OBO) — the app never holds a whole result set for display. Every identifier is allowlist-validated and every value is a bound parameter.
 4. **Config-driven reports.** All report metadata (columns, filters, source table, ordering) comes from the registry table — zero code change to add a report.
 5. **Air-gap.** No CDN, no external URLs in authored templates/CSS/JS. All assets committed locally.
 

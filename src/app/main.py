@@ -9,10 +9,12 @@ PRINCIPAL and TTL-cached in-process (LOCKED DECISION L5). Because the SDK is
 fully synchronous, every SDK call inside an ``async def`` route is wrapped in
 ``asyncio.to_thread`` so it never blocks the event loop.
 
-Per-user snapshots are cached in-process (LOCKED DECISION L2): a date-scoped read
-of ``display ∪ filter`` columns is fetched once, then filter/search/pagination run
-server-side over the cached rows (no re-query). The cache is keyed by
-``(user_email, report_id, date)`` so it only ever holds a user's own OBO data.
+The interactive display path uses SERVER-SIDE SQL PAGING: date scope, filters,
+search, sort, and pagination are all pushed into the SQL (a ``COUNT(*)`` for the
+total + one ``LIMIT/OFFSET`` page per request), run AS THE USER, so a large report
+never materializes in the app. Downloads fetch the full filtered/searched set
+(bounded by the spill cap) the same way. Every identifier is allowlist-validated
+and every value is a bound parameter (see ``reports.build_report_page_query``).
 
 All configuration comes from environment variables (no hardcoded host/token/
 warehouse). ``DATABRICKS_HOST`` and the app service-principal credentials are
@@ -57,15 +59,7 @@ from auth import (
 )
 from cache import (
     BoundedTTLCache,
-    Snapshot,
-    SnapshotCache,
-    apply_filters,
-    apply_search,
-    distinct_values,
     filters_summary,
-    make_key,
-    paginate,
-    sort_rows,
 )
 from config import (
     app_logo,
@@ -82,7 +76,7 @@ from exports import (
     to_csv_bytes,
     to_xlsx_bytes,
 )
-from render import display_rows, haystack_for, header_cells, is_numeric_format
+from render import display_rows, header_cells, is_numeric_format
 from reports import (
     AUDIT_LOG_COLUMNS,
     CONFIG_AUDIT_COLUMNS,
@@ -96,10 +90,14 @@ from reports import (
     build_config_audit_insert,
     build_config_audit_query,
     build_config_audit_row,
+    build_columns_probe_query,
+    build_distinct_values_query,
     build_preview_query,
     build_report_config_query,
     build_report_config_delete,
     build_report_config_upsert,
+    build_report_count_query,
+    build_report_page_query,
     build_report_query,
     build_report_view_delete,
     build_report_view_query,
@@ -190,9 +188,6 @@ templates.env.globals.update(
     asset_version=_ASSET_VERSION,
 )
 
-# Per-user snapshot cache (LOCKED DECISION L2). Bounded LRU; refresh evicts. Each
-# key is (user_email, report_id, date) so no cross-user data ever mixes.
-_snapshot_cache = SnapshotCache(max_size=128)
 
 # Report registry TTL cache (LOCKED DECISION L5): parsed ReportConfigs read as the
 # app SP, refreshed at most every _REPORTS_TTL seconds so a MERGE'd row appears
@@ -790,85 +785,6 @@ def _reports_in_view(
         The visible reports whose effective view group is ``view_key``.
     """
     return [c for c in visible if effective_view_group(c) == view_key]
-
-
-async def _ensure_snapshot(
-    token: str,
-    email: str,
-    report: ReportConfig,
-    date: str,
-    *,
-    refresh: bool = False,
-) -> Snapshot:
-    """Return the cached per-user snapshot for a (report, date), reading OBO on miss.
-
-    When the report configures display columns, the snapshot selects
-    ``dedup(display columns ∪ filter fields)`` (the filter field MUST be
-    projected or in-app filtering breaks); when it does not, the snapshot selects
-    ``*`` so every column the query returns is available for display and search.
-    It is date-scoped only when the report has a ``date_field`` (``date`` is
-    then bound), ordered by ``order_by``. On ``refresh`` the key is evicted first
-    so the snapshot is re-read OBO and re-stamped.
-
-    Args:
-        token: The user's OBO access token.
-        email: The user's email (cache key component).
-        report: The report whose source is read.
-        date: The formatted report_date to scope by (``""`` when the report has
-            no ``date_field``).
-        refresh: When ``True``, evict any cached snapshot before reading.
-
-    Returns:
-        The cached (or freshly-read) :class:`Snapshot`.
-
-    Raises:
-        ReportDataError: If the OBO read does not succeed (UC-denied, missing
-            table/column, etc.).
-    """
-    key = make_key(email, report.report_id, date)
-    if refresh:
-        _snapshot_cache.evict(key)
-    snap = _snapshot_cache.get(key)
-    if snap is not None:
-        return snap
-    # Empty configured columns -> select * (all query columns show by default).
-    # When any column is an aggregate, split into plain (grouped) + aggregate
-    # projections; filter fields must also be grouped so in-memory filtering over
-    # the snapshot still works (LOCKED: aggregation is join-safe — every non-agg
-    # selected/filtered column lands in GROUP BY, see reports.build_report_query).
-    select_cols: list[str] | None = None
-    aggregates: list[dict] | None = None
-    if report.columns:
-        plain, aggs = split_columns(report.columns)
-        aggregates = aggs or None
-        select_cols = _dedup(plain + [f.field for f in report.filters])
-    # Under aggregation, ORDER BY is only valid on a grouped (plain) column or an
-    # aggregate output alias — otherwise the query errors ("not in GROUP BY").
-    # Drop an unsafe order_by (client-side click-to-sort still applies).
-    order_by = report.order_by
-    if aggregates and order_by:
-        _agg_outputs = {a["output"] for a in aggregates}
-        if order_by not in (select_cols or []) and order_by not in _agg_outputs:
-            order_by = None
-    # Scope by date only when the report is date-scoped AND a specific date is
-    # chosen; an empty date is the "All dates" sentinel (no WHERE on the date).
-    scope = bool(report.date_field and date)
-    sql, params = build_report_query(
-        report.source_query,
-        select_cols,
-        report.date_field if scope else None,
-        date if scope else None,
-        filters=None,
-        order_by=order_by,
-        aggregates=aggregates,
-    )
-    cols, data = await _run_sql(token, sql, _to_sdk_params(params))
-    rows = [dict(zip(cols, row)) for row in data]
-    snap = Snapshot(columns=cols, rows=rows, fetched_at=time.time())
-    _snapshot_cache.put(key, snap)
-    return snap
-
-
 def _nav_reports(configs: list[ReportConfig]) -> list[dict]:
     """Build the tab-nav descriptor list from the enabled report configs.
 
@@ -879,27 +795,143 @@ def _nav_reports(configs: list[ReportConfig]) -> list[dict]:
         A list of ``{"report_id", "title"}`` dicts for the tab nav.
     """
     return [{"report_id": c.report_id, "title": c.title} for c in configs]
+def _column_query_args(
+    report: ReportConfig,
+) -> tuple[list[str] | None, list[dict] | None]:
+    """Return ``(select_cols, aggregates)`` for a report's display columns.
+
+    Configured columns -> the plain (non-aggregated) names to SELECT + the
+    aggregate specs; empty columns -> ``(None, None)`` = SELECT * (all query
+    columns). Filter fields need NOT be projected — the inner query filters in
+    WHERE over the wrapped source, which exposes every source column.
+    """
+    if not report.columns:
+        return None, None
+    plain, aggs = split_columns(report.columns)
+    return (plain or None), (aggs or None)
 
 
-def _effective_columns(
-    report: ReportConfig, snap: Snapshot | None
+async def _resolve_display_columns(
+    token: str, report: ReportConfig
 ) -> list[ColumnSpec]:
-    """Return the columns to render for a report, given a snapshot (or none).
+    """Resolve effective display columns, probing a SELECT-* report's schema OBO.
 
-    Delegates to :func:`reports.resolve_columns`: the configured columns win when
-    present; otherwise every column the query returned becomes a text column
-    (labelled by its own name). Falls back to the configured columns when there
-    is no snapshot (unreadable source), so headers still render if configured.
+    Configured columns win with no query; a SELECT-* report runs a zero-row probe
+    (``build_columns_probe_query``) so search/sort can reference the real output
+    column names.
+    """
+    if report.columns:
+        return resolve_columns(report.columns, [])
+    cols, _data = await _run_sql(token, build_columns_probe_query(report.source_query))
+    return resolve_columns([], cols)
 
-    Args:
-        report: The active report.
-        snap: The per-user snapshot, or ``None`` when the source is unreadable.
+
+def _total_pages(total_rows: int, size: int | None) -> tuple[int, int]:
+    """Return ``(limit, total_pages)`` for a row count + page size (None = All)."""
+    limit = _ALL_PAGE_CAP if size is None else max(1, size)
+    return limit, max(1, (max(0, total_rows) + limit - 1) // limit)
+
+
+async def _query_report_page(
+    token: str,
+    report: ReportConfig,
+    *,
+    date: str,
+    selected_filters: dict[str, str],
+    search: str,
+    sort_key: str,
+    sort_dir: str,
+    page: int,
+    size: int | None,
+    columns: list[ColumnSpec] | None = None,
+) -> tuple[list[ColumnSpec], list[dict], int]:
+    """Run ``COUNT(*)`` + one page of a report OBO (server-side paging).
+
+    Filter/search/sort/paginate ALL execute in SQL as the signed-in user, so a
+    huge report never materializes in the app (this replaces the read-everything
+    in-memory snapshot for the display path). ``size=None`` ("All") is capped at
+    :data:`_ALL_PAGE_CAP`.
 
     Returns:
-        The effective ordered :class:`ColumnSpec` list.
+        ``(columns, page_row_dicts, total_rows)``.
+
+    Raises:
+        RuntimeError: If an OBO read fails (UC-denied, missing table/col, etc.).
     """
-    result_columns = snap.columns if snap is not None else []
-    return resolve_columns(report.columns, result_columns)
+    if columns is None:
+        columns = await _resolve_display_columns(token, report)
+    col_names = [c.name for c in columns]
+    select_cols, aggregates = _column_query_args(report)
+    # Ignore an unknown sort key; numeric columns sort by value (TRY_CAST).
+    numeric_sort = False
+    if sort_key:
+        sc = next((c for c in columns if c.name == sort_key), None)
+        if sc is None:
+            sort_key = ""
+        else:
+            numeric_sort = is_numeric_format(sc.format)
+    # Only known filter fields with a non-empty value become WHERE equality binds
+    # ("" is the "All" sentinel = no constraint). Unknown keys are ignored.
+    known = {f.field for f in report.filters}
+    active_filters = {
+        k: v for k, v in (selected_filters or {}).items() if k in known and v
+    }
+    scope_field = report.date_field if (report.date_field and date) else None
+    scope_date = date if scope_field else None
+
+    count_sql, cparams = build_report_count_query(
+        report.source_query,
+        columns=select_cols,
+        date_field=scope_field,
+        report_date=scope_date,
+        filters=active_filters or None,
+        aggregates=aggregates,
+        search=search or None,
+        search_columns=col_names,
+    )
+    _c, cdata = await _run_sql(token, count_sql, _to_sdk_params(cparams))
+    total_rows = int(cdata[0][0]) if cdata and cdata[0] else 0
+
+    limit, _tp = _total_pages(total_rows, size)
+    offset = max(0, (page - 1) * limit)
+    page_sql, pparams = build_report_page_query(
+        report.source_query,
+        columns=select_cols,
+        date_field=scope_field,
+        report_date=scope_date,
+        filters=active_filters or None,
+        aggregates=aggregates,
+        order_by=report.order_by,
+        sort_key=sort_key or None,
+        sort_dir=sort_dir,
+        search=search or None,
+        search_columns=col_names,
+        numeric_sort=numeric_sort,
+        limit=limit,
+        offset=offset,
+    )
+    rcols, rdata = await _run_sql(token, page_sql, _to_sdk_params(pparams))
+    rows = [dict(zip(rcols, row)) for row in rdata]
+    return columns, rows, total_rows
+
+
+async def _report_filter_options(
+    token: str, report: ReportConfig, date: str
+) -> dict[str, list[str]]:
+    """Distinct values for each filter dropdown (OBO), optionally date-scoped."""
+    options: dict[str, list[str]] = {}
+    scope_field = report.date_field if (report.date_field and date) else None
+    scope_date = date if scope_field else None
+    for f in report.filters:
+        sql, params = build_distinct_values_query(
+            report.source_query,
+            f.field,
+            date_field=scope_field,
+            report_date=scope_date,
+        )
+        _c, data = await _run_sql(token, sql, _to_sdk_params(params))
+        options[f.field] = [str(r[0]) for r in data if r and r[0] is not None]
+    return options
 
 
 def _resolve_can_download(me_user, report: ReportConfig) -> bool:
@@ -1238,8 +1270,8 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
             },
         )
 
-    # Resolve the date list OBO ONLY when the report is date-scoped; an
-    # unreadable source records an explicit notice (rendered in the empty state).
+    # The date dropdown's options are the DISTINCT date values (date is now just
+    # a filter, #7); an unreadable source records an explicit notice.
     notice = ""
     dates: list[str] = []
     if report.date_field:
@@ -1267,35 +1299,31 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
     total_rows = 0
     total_pages = 1
     fetched_at = ""
+    # Configured columns render even on error; a SELECT-* report's columns are
+    # resolved from the query below.
+    columns: list[ColumnSpec] = resolve_columns(report.columns, [])
 
-    # Read the snapshot whenever the source is reachable (date scope, if any, is
-    # applied inside _ensure_snapshot; an empty selected_date reads all dates).
-    snap: Snapshot | None = None
+    # Server-side paging: distinct filter options + COUNT + first page, all OBO.
+    # No in-memory snapshot — a 1M-row source never materializes in the app.
     if not notice:
         try:
-            snap = await _ensure_snapshot(token, email, report, selected_date)
+            filter_options = await _report_filter_options(token, report, selected_date)
+            columns, page_rows, total_rows = await _query_report_page(
+                token,
+                report,
+                date=selected_date,
+                selected_filters={},
+                search="",
+                sort_key="",
+                sort_dir="asc",
+                page=1,
+                size=_DEFAULT_PAGE_SIZE,
+            )
+            _limit, total_pages = _total_pages(total_rows, _DEFAULT_PAGE_SIZE)
+            cells = display_rows(columns, page_rows)
+            fetched_at = _fmt_ts(time.time())
         except RuntimeError as exc:
             notice = str(exc)
-
-    columns = _effective_columns(report, snap)
-    headers = header_cells(columns)
-
-    if snap is not None:
-        # Distinct values feed each filter dropdown; every filter defaults to
-        # "All" (no constraint). The template prepends the "All" option. Any
-        # unexpected failure building the initial page becomes a notice (never a
-        # raw 500); the traceback is logged so the cause is diagnosable.
-        try:
-            for f in report.filters:
-                filter_options[f.field] = distinct_values(snap.rows, f.field)
-                selected_filters[f.field] = ""
-            filtered = apply_filters(snap.rows, selected_filters)
-            searched = apply_search(filtered, "", haystack_for(columns))
-            page_rows, total_rows, total_pages = paginate(
-                searched, 1, _DEFAULT_PAGE_SIZE
-            )
-            cells = display_rows(columns, page_rows)
-            fetched_at = _fmt_ts(snap.fetched_at)
         except Exception as exc:  # noqa: BLE001 - render a notice, never a 500
             import traceback
             print(
@@ -1307,6 +1335,7 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
                 "narrow the date/filters."
             )
 
+    headers = header_cells(columns)
     can_download = _resolve_can_download(me_user, report)
     disclaimer = await _effective_disclaimer()
 
@@ -1343,8 +1372,8 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
 async def report_table(request: Request, report_id: str) -> HTMLResponse:
     """Return the ``_rows.html`` table-body fragment for a report selection.
 
-    Applies ``filter -> search -> paginate`` server-side over the cached
-    snapshot (NO DB re-query). Totals + fetch time are returned as
+    Runs ``COUNT(*)`` + one ``LIMIT/OFFSET`` page in SQL (filter/search/sort/
+    paginate all pushed down, AS THE USER). Totals + fetch time are returned as
     ``X-Total-Rows``/``X-Total-Pages``/``X-Page``/``X-Fetched-At`` headers so the
     JS can redraw the pager + "Last updated" label without polluting the markup.
 
@@ -1401,26 +1430,10 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     # the table). RuntimeError -> the specific message; any other exception ->
     # a generic message + a logged traceback so the real cause is diagnosable.
     try:
-        # Validate the requested date against the OBO date list, but only for a
-        # date-scoped report; an undated report ignores the date param entirely.
+        # Server-side paging: filter/search/sort/paginate run in SQL as the user
+        # (no in-memory snapshot). The date is just a bound WHERE value now (#7);
+        # a stale/unknown date simply yields the empty state, never a 400/500.
         date = request.query_params.get("date", "")
-        if report.date_field:
-            _dcols, date_rows = await _run_sql(
-                token,
-                build_report_dates_query_generic(
-                    report.source_query, report.date_field
-                ),
-            )
-            allowed = {format_report_date(r[0]) for r in date_rows}
-            # "" is the "All dates" sentinel (no date scope). A stale/unknown date
-            # (e.g. after the date list changed) must NOT 500/400 the fragment —
-            # fall back to the latest known date so the table still renders.
-            if date != "" and date not in allowed:
-                date = format_report_date(sorted(allowed, reverse=True)[0]) if allowed else ""
-        else:
-            date = ""
-
-        # Only known filter fields are honored; unknown query keys are ignored.
         selected_filters: dict[str, str] = {}
         for f in report.filters:
             val = request.query_params.get(f.field)
@@ -1432,34 +1445,21 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
         size = _PAGE_SIZES.get(
             (request.query_params.get("size") or "").lower(), _DEFAULT_PAGE_SIZE
         )
-        refresh = request.query_params.get("refresh") == "1"
-
-        snap = await _ensure_snapshot(token, email, report, date, refresh=refresh)
-
-        columns = _effective_columns(report, snap)
-
-        # Any filter not supplied defaults to "All" (no constraint).
-        for f in report.filters:
-            if f.field not in selected_filters:
-                selected_filters[f.field] = ""
-
-        filtered = apply_filters(snap.rows, selected_filters)
-        searched = apply_search(filtered, q, haystack_for(columns))
-        # Optional click-to-sort: only a known display column is honored; numeric
-        # columns (int/pct/float/double) sort by value, others as text. Unknown key
-        # -> no sort. is_numeric_format is the shared source of truth with alignment.
         sort_key = request.query_params.get("sort", "")
         sort_dir = request.query_params.get("dir", "asc")
-        if sort_key:
-            col = next((c for c in columns if c.name == sort_key), None)
-            if col is not None:
-                searched = sort_rows(
-                    searched,
-                    sort_key,
-                    sort_dir if sort_dir in ("asc", "desc") else "asc",
-                    numeric=is_numeric_format(col.format),
-                )
-        page_rows, total_rows, total_pages = paginate(searched, page, size)
+
+        columns, page_rows, total_rows = await _query_report_page(
+            token,
+            report,
+            date=date,
+            selected_filters=selected_filters,
+            search=q,
+            sort_key=sort_key,
+            sort_dir=sort_dir,
+            page=page,
+            size=size,
+        )
+        _limit, total_pages = _total_pages(total_rows, size)
         cells = display_rows(columns, page_rows)
     except RuntimeError as exc:
         # Expected data errors (UC-denied, missing table/column, warehouse, etc.)
@@ -1480,7 +1480,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     resp.headers["X-Total-Rows"] = str(total_rows)
     resp.headers["X-Total-Pages"] = str(total_pages)
     resp.headers["X-Page"] = str(max(1, min(page, total_pages)))
-    resp.headers["X-Fetched-At"] = _fmt_ts(snap.fetched_at)
+    resp.headers["X-Fetched-At"] = _fmt_ts(time.time())
     return resp
 
 
@@ -1557,12 +1557,10 @@ async def download(request: Request) -> Response:
     Flow (audit-first): validate the OBO token (401) -> kill switch (403) ->
     resolve the report (404) -> re-check membership of the report's effective
     download group (403; never trust the hidden UI; degrade-safe deny) ->
-    acknowledgement + justification (400) -> validate ``date`` against the
-    report's OBO date list (400) -> read/reuse the per-user OBO snapshot ->
-    default any absent filter to its first distinct value (SAME defaulting as
-    the table) -> ``apply_filters`` + ``apply_search`` over the cached rows (ALL
-    matching rows, no pagination) -> build the file for the report's display
-    columns -> write EXACTLY ONE audit row as the app SP (must reach SUCCEEDED,
+    acknowledgement + justification (400) -> validate ``date`` (400) -> read the
+    full filtered/searched result AS THE USER via server-side SQL (filter/search
+    pushed down), bounded by the spill cap -> build the file for the report's
+    display columns -> write EXACTLY ONE audit row as the app SP (must reach SUCCEEDED,
     else 500 and NO file) -> emit an app-log line -> return the attachment.
 
     Args:
@@ -1619,12 +1617,8 @@ async def download(request: Request) -> Response:
             status_code=403,
             detail="You are not authorized to download this data.",
         )
-    # Keep the raw X-Forwarded-User id to key the snapshot cache — report_page /
-    # report_table key by that raw header (on GovCloud a numeric SCIM id, not an
-    # email), so reusing it here reuses the exact snapshot the table just fetched
-    # instead of a fresh full OBO re-read + a duplicate cache entry (LOCKED L2).
-    # The readable email is only for the audit row, the spill subfolder, and logs.
-    snapshot_email = email
+    # Readable email for the audit row, the spill subfolder, and logs (the OBO
+    # export read below is keyed by the user's token, not the email).
     email = _readable_email(me_user, email)
 
     # 4) Validate acknowledgement + justification.
@@ -1659,35 +1653,46 @@ async def download(request: Request) -> Response:
     else:
         date = ""
 
-    # 6) Read/reuse the per-user OBO snapshot for (report, date). Keyed by the
-    # raw header id (snapshot_email) so it matches the table's cache entry.
-    try:
-        snap = await _ensure_snapshot(token, snapshot_email, report, date)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    columns = _effective_columns(report, snap)
-
-    # 7) Build selected_filters from the form; any absent filter defaults to
-    # "All" (no constraint) — SAME defaulting as report_table -> matches screen.
+    # 6) Build the filter/search selection from the form; any absent filter
+    # defaults to "All" (no constraint) — SAME defaulting as report_table so the
+    # export matches what's on screen.
     selected_filters: dict[str, str] = {}
     for f in report.filters:
         val = form.get(f.field)
         selected_filters[f.field] = str(val) if val is not None else ""
-
     search = str(form.get("search", ""))
-    filtered = apply_filters(snap.rows, selected_filters)
-    searched = apply_search(filtered, search, haystack_for(columns))
 
-    # 8) Size policy. At/under the direct cap the file downloads inline. Over it
-    # but within the spill cap, it's written to the export volume (OBO) and
-    # retrieved separately, so the app never blocks on one huge response. Beyond
-    # the spill cap — or with no export volume configured — a 413 asks to narrow.
+    # 7) Size-policy caps (format-dependent). Determined BEFORE the read so the
+    # OBO fetch is bounded by the spill cap: a download inherently materializes
+    # the whole matching set to build the file (unlike the paged DISPLAY path).
     fmt = "xlsx" if str(form.get("format", "csv")) == "xlsx" else "csv"
-    n = len(searched)
     direct_cap = _MAX_XLSX_ROWS if fmt == "xlsx" else _MAX_DOWNLOAD_ROWS
     spill_cap = _MAX_XLSX_SPILL_ROWS if fmt == "xlsx" else _MAX_SPILL_ROWS
     _csv_hint = " Or choose CSV." if fmt == "xlsx" else ""
+
+    # 8) Read the full filtered/searched result OBO (server-side filter/search),
+    # bounded by the spill cap. total_rows is the exact count driving the size
+    # decision + messages; `searched` holds every matching row when n <= spill_cap
+    # (when it exceeds spill_cap we 413 below without using the truncated rows).
+    try:
+        columns, searched, n = await _query_report_page(
+            token,
+            report,
+            date=date,
+            selected_filters=selected_filters,
+            search=search,
+            sort_key="",
+            sort_dir="asc",
+            page=1,
+            size=spill_cap,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # At/under the direct cap the file downloads inline. Over it but within the
+    # spill cap, it's written to the export volume (OBO) and retrieved separately,
+    # so the app never blocks on one huge response. Beyond the spill cap — or with
+    # no export volume configured — a 413 asks to narrow.
     spill = n > direct_cap
     if spill and not _EXPORT_VOLUME:
         raise HTTPException(

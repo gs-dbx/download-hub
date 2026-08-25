@@ -11,3 +11,10 @@
   {% endfor %}
 </tr>
 {% endfor %}
+{% if not rows %}
+{# Empty state: never leave the tbody blank (a blank table reads as broken). The
+   fragment endpoint swaps only the tbody, so this row IS the whole feedback. #}
+<tr class="app-emptyrow">
+  <td colspan="99">{{ empty_message | default("No rows match the current filters.") }}</td>
+</tr>
+{% endif %}

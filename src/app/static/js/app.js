@@ -256,7 +256,17 @@
     showSpinner();
     try {
       var resp = await fetch(url, { headers: { Accept: "text/html" } });
-      tbody.innerHTML = await resp.text(); // swap the server-rendered fragment
+      var html = await resp.text();
+      // The server returns row fragments even for handled errors (401/403/503).
+      // But an UNhandled error would be a non-row body (JSON/HTML) — never dump
+      // that into the table; show a clean inline message instead of blanking.
+      if (!resp.ok && html.lastIndexOf("<tr", 0) !== 0) {
+        html =
+          '<tr><td colspan="99">Could not load the data (HTTP ' +
+          resp.status +
+          "). Try again, or narrow the date/filters.</td></tr>";
+      }
+      tbody.innerHTML = html; // swap the server-rendered fragment
       var totalRows = parseInt(resp.headers.get("X-Total-Rows") || "0", 10);
       var totalPages = parseInt(resp.headers.get("X-Total-Pages") || "1", 10);
       var page = parseInt(resp.headers.get("X-Page") || "1", 10);

@@ -75,7 +75,7 @@ from config import (
 )
 from errors import ReportDataError, friendly_error
 from exports import DEFAULT_DISCLAIMER, filename_for, to_csv_bytes, to_xlsx_bytes
-from render import display_rows, haystack_for, header_cells
+from render import display_rows, haystack_for, header_cells, is_numeric_format
 from reports import (
     AUDIT_LOG_COLUMNS,
     CONFIG_AUDIT_COLUMNS,
@@ -1426,7 +1426,8 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     filtered = apply_filters(snap.rows, selected_filters)
     searched = apply_search(filtered, q, haystack_for(columns))
     # Optional click-to-sort: only a known display column is honored; numeric
-    # columns (int/pct) sort by value, others as text. Unknown key -> no sort.
+    # columns (int/pct/float/double) sort by value, others as text. Unknown key
+    # -> no sort. is_numeric_format is the shared source of truth with alignment.
     sort_key = request.query_params.get("sort", "")
     sort_dir = request.query_params.get("dir", "asc")
     if sort_key:
@@ -1436,7 +1437,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
                 searched,
                 sort_key,
                 sort_dir if sort_dir in ("asc", "desc") else "asc",
-                numeric=col.format in ("int", "pct"),
+                numeric=is_numeric_format(col.format),
             )
     page_rows, total_rows, total_pages = paginate(searched, page, size)
     cells = display_rows(columns, page_rows)

@@ -28,6 +28,7 @@ __all__ = [
     "cell_text",
     "pct_class",
     "align_class",
+    "is_numeric_format",
     "header_cells",
     "display_rows",
     "haystack_for",
@@ -100,6 +101,24 @@ def pct_class(value: object) -> str:
     return ""
 
 
+def is_numeric_format(fmt: str) -> bool:
+    """Return ``True`` for numeric column formats.
+
+    Numeric formats (``int``/``pct``/``float``/``double``) render right-aligned
+    and, when their column is click-sorted, must compare by numeric value rather
+    than as text. This is the single source of truth so alignment and sort never
+    diverge (e.g. a ``float`` column must not sort lexicographically while it is
+    right-aligned as a number).
+
+    Args:
+        fmt: The column ``format`` hint.
+
+    Returns:
+        ``True`` if ``fmt`` is a numeric format, else ``False``.
+    """
+    return fmt in _NUMERIC_FORMATS
+
+
 def align_class(fmt: str) -> str:
     """Return the alignment CSS class for a column format.
 
@@ -110,7 +129,7 @@ def align_class(fmt: str) -> str:
         ``"text-right"`` for numeric formats (``int``/``float``/``double``/``pct``),
         else ``""``.
     """
-    return "text-right" if fmt in _NUMERIC_FORMATS else ""
+    return "text-right" if is_numeric_format(fmt) else ""
 
 
 def header_cells(columns: list[ColumnSpec]) -> list[dict]:

@@ -246,21 +246,21 @@ body {
 .app-field--refresh { flex: 0 0 auto; justify-content: flex-end; }
 .app-field--refresh .usa-button { margin-top: 0.25rem; }
 
-/* ---- Control bar: filters left, Download action right, one aligned row ---- */
+/* ---- Control bar: one compact cluster of filters; actions right-aligned on the
+   same row (wrap together below only when there's no room). ---- */
 .app-toolbar {
   display: flex;
-  align-items: flex-end;      /* bottom-align the button with the inputs */
-  justify-content: space-between;
+  align-items: flex-end;      /* bottom-align the buttons with the inputs */
   flex-wrap: wrap;
-  gap: 1rem 1.5rem;
-  margin: 0 0 1.25rem 0;
+  gap: 0.75rem 1rem;
+  margin: 0 0 1rem 0;
 }
 
 .app-toolbar__filters {
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.75rem 1rem;
   flex: 1 1 auto;
   margin: 0;                  /* override usa-form spacing */
   max-width: none;
@@ -281,12 +281,19 @@ body {
 .app-field .usa-input,
 .app-field .usa-select { margin-top: 0.25rem; width: 100%; max-width: 100%; }
 
-.app-field--search { flex: 1 1 18rem; }
-.app-field--date   { flex: 0 0 15rem; }   /* room for "2026-01-12 00:00:00" */
+.app-field--search { flex: 0 1 15rem; }   /* don't balloon — was 1 1 18rem */
+.app-field--date   { flex: 0 0 14rem; }   /* room for "2026-01-12 00:00:00" */
 .app-field--drain  { flex: 0 0 8rem; }
 
+/* Actions (SQL + Download) cluster on the right of the control row; margin-left
+   auto fills the gap so the space isn't wasted, and they wrap together below on
+   narrow screens. */
 .app-toolbar__actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
   flex: 0 0 auto;
+  margin-left: auto;
   padding-bottom: 0.1rem;
 }
 
@@ -636,11 +643,6 @@ select,
 .app-navoverlay[hidden] { display: none; }
 
 /* ---- Table-head strip: subtle SQL button, right-aligned ---- */
-.app-tablehead {
-  display: flex;
-  justify-content: flex-end;
-  margin: 0.25rem 0;
-}
 .app-sqlbtn {
   display: inline-flex;
   align-items: center;

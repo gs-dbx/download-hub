@@ -70,8 +70,22 @@
                 data-role="report-refresh">Refresh</button>
       </div>
     </form>
-    {% if can_download %}
+    {# Actions cluster (right side of the control row): the SQL button (query
+       reports — opens a modal with the effective query for the current view, live
+       from /report/{id}/sql) and the primary Download button. Grouped here so
+       they share the row instead of each taking a lonely line. #}
+    {% if report.source_query or can_download %}
     <div class="app-toolbar__actions">
+      {% if report.source_query %}
+      <button type="button" class="usa-button usa-button--outline app-sqlbtn"
+              data-role="report-sql-btn">
+        <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+          <use xlink:href="/static/uswds/img/sprite.svg#code"></use>
+        </svg>
+        SQL
+      </button>
+      {% endif %}
+      {% if can_download %}
       <a href="#download-modal" class="usa-button app-download-btn"
          aria-controls="download-modal" data-open-modal>
         <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
@@ -79,24 +93,10 @@
         </svg>
         Download data
       </a>
+      {% endif %}
     </div>
     {% endif %}
   </div>
-
-  {# Table header strip: a subtle "SQL" button (query reports only) that opens a
-     modal showing the effective query for the CURRENT view — fetched live from
-     /report/{id}/sql with the active date + filters + sort applied. #}
-  {% if report.source_query %}
-  <div class="app-tablehead">
-    <button type="button" class="usa-button usa-button--outline usa-button--small app-sqlbtn"
-            data-role="report-sql-btn">
-      <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
-        <use xlink:href="/static/uswds/img/sprite.svg#code"></use>
-      </svg>
-      SQL
-    </button>
-  </div>
-  {% endif %}
 
   {#
     The table sits in a positioned wrapper so app.js can overlay a loading

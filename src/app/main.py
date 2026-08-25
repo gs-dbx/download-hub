@@ -1592,7 +1592,12 @@ async def download(request: Request) -> Response:
             status_code=403,
             detail="You are not authorized to download this data.",
         )
-    # Prefer the readable email over the numeric X-Forwarded-User id for the audit.
+    # Keep the raw X-Forwarded-User id to key the snapshot cache — report_page /
+    # report_table key by that raw header (on GovCloud a numeric SCIM id, not an
+    # email), so reusing it here reuses the exact snapshot the table just fetched
+    # instead of a fresh full OBO re-read + a duplicate cache entry (LOCKED L2).
+    # The readable email is only for the audit row, the spill subfolder, and logs.
+    snapshot_email = email
     email = _readable_email(me_user, email)
 
     # 4) Validate acknowledgement + justification.
@@ -1627,9 +1632,10 @@ async def download(request: Request) -> Response:
     else:
         date = ""
 
-    # 6) Read/reuse the per-user OBO snapshot for (report, date).
+    # 6) Read/reuse the per-user OBO snapshot for (report, date). Keyed by the
+    # raw header id (snapshot_email) so it matches the table's cache entry.
     try:
-        snap = await _ensure_snapshot(token, email, report, date)
+        snap = await _ensure_snapshot(token, snapshot_email, report, date)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

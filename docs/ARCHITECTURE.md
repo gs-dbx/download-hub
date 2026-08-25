@@ -4,7 +4,7 @@
 
 A `report_config` row is one of two **kinds** (the `kind` column, default `query`):
 
-- **`query`** — reads a SQL `SELECT` (`source_query`) OBO into a per-user snapshot, then filters/searches/sorts/paginates in memory and offers a gated CSV/XLSX download. Columns may be aggregated (`AGG(source)` + join-safe `GROUP BY`).
+- **`query`** — reads a SQL `SELECT` (`source_query`) OBO with **server-side SQL paging**: the active date/filters/search/sort are pushed into SQL and each interaction runs a `COUNT(*)` (pager total) + one `LIMIT`/`OFFSET` page, so a large report never materializes in the app. Offers a gated CSV/XLSX download (the full filtered/searched set, bounded by the spill cap). Columns may be aggregated (`AGG(source)` + join-safe `GROUP BY`).
 - **`volume`** — browses a pinned UC Volume root (`volume_root`) via the Files API OBO: folders-first listing, breadcrumb traversal (path-jailed to the root in `volumes.py`), and per-file gated download. Same acknowledgement + justification + audit-first write as query downloads. Routes: `GET /volume/{id}/list`, `POST /volume/{id}/download`.
 
 Both kinds share the group-based visibility/download gating and the audit table.
@@ -27,19 +27,16 @@ FastAPI route (main.py)
             └─ Parse report_config rows
             └─ Sort by display_order
 
-Per-user snapshot cache
-  ├─ Key: (user_email, report_id, date)
-  ├─ Columns: display_cols ∪ filter_fields (de-duplicated)
-  └─ Scope: WHERE date_field = :report_date (value bound)
-
-Apply filters / search / paginate
-  ├─ Filter: WHERE field = selected_value (in-memory, no re-query)
-  ├─ Search: haystack concat of searchable columns, text search
-  └─ Paginate: slice rows per page_size
+Server-side SQL paging (per interaction, OBO)
+  ├─ COUNT(*) over ( source_query [+ date/filters] ) → pager total
+  ├─ One page: SELECT ... FROM ( source_query ) [WHERE date/filters + search]
+  │            ORDER BY <sort> LIMIT <size> OFFSET <page*size>
+  ├─ Values bound (date/filter/search); identifiers allowlist-validated; LIMIT/OFFSET clamped
+  └─ Filter dropdowns: a distinct-values query per filter field
 
 Render
   ├─ Full page (report.html) on first load or tab change
-  ├─ Fragment (_rows.html) on filter/search/page change (HTMX)
+  ├─ Fragment (_rows.html) on filter/search/sort/page change (JS fetch)
   └─ Response headers carry totals + metadata (X-Total-Rows, etc.)
 
 Download
@@ -49,8 +46,8 @@ Download
   ├─ 4. Re-check group membership (server-side defense)
   ├─ 5. Validate ack + justification
   ├─ 6. Validate date against OBO date list
-  ├─ 7. Get per-user snapshot (OBO read)
-  ├─ 8. Apply filters + search (in-memory, ALL rows, no pagination)
+  ├─ 7. Run the filtered/searched query OBO (all matching rows, bounded by the spill cap) + exact COUNT
+  ├─ 8. Size policy: inline vs. spill-to-volume vs. 413
   ├─ 9. Build CSV/XLSX file bytes
   ├─ 10. Write audit row (as app SP, BEFORE returning file)
   └─ 11. Return file attachment (or HTTP 500 if audit fails)
@@ -77,7 +74,8 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `_run_sql_sp_query()` — execute as SP (registry read)
 - `_run_sql_sp()` — execute as SP (audit write)
 - `_load_reports()` — read report registry, parse configs, TTL-cache
-- `_ensure_snapshot()` — read/cache per-user snapshot for (report, date)
+- `_query_report_page()` — run `COUNT(*)` + one `LIMIT`/`OFFSET` page OBO (server-side paging); also used by download with `size` = spill cap
+- `_report_filter_options()` — distinct values per filter field (OBO)
 - `_resolve_can_download()` — check kill switch + group membership
 
 ### Pure modules (no SDK, no async, fully unit-testable)
@@ -104,13 +102,10 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `build_report_query()` — build parameterized SELECT (optional `aggregates` → `AGG(source)` + join-safe `GROUP BY`)
 - `build_report_config_query()` / `build_report_config_upsert()` / `build_report_config_delete()` — registry read/write/delete builders
 
-**`cache.py`** — Snapshot cache & filtering
-- `SnapshotCache` — bounded LRU (max 128 entries)
-- `apply_filters()` — filter rows in-memory
-- `apply_search()` — search haystack in-memory
-- `paginate()` — slice rows per page
-- `distinct_values()` — extract distinct column values
+**`cache.py`** — Pure helpers + small caches
+- `BoundedTTLCache` — bounded, TTL-expiring cache (used for SCIM-id → email display lookups)
 - `filters_summary()` — format filter selections for audit
+- `SnapshotCache` / `apply_filters()` / `apply_search()` / `paginate()` — tested pure utilities retained here, but NOT the runtime data path (the display path is server-side SQL paging)
 
 **`exports.py`** — CSV/XLSX builders
 - `to_csv_bytes()` — build CSV file bytes (with disclaimer header)
@@ -147,18 +142,20 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 
 ## Caching model
 
-### Per-user snapshot cache
+### Display reads — server-side SQL paging (no cache)
 
-- **Type:** Bounded LRU (max 128 entries)
-- **Key:** `(user_email, report_id, report_date)`
-- **Columns:** display_cols ∪ filter_fields (de-duplicated, ordered by display_order + filter list order)
-- **Scope:** `WHERE {date_field} = :report_date` (value bound)
-- **Lifetime:** In-process, evicted when:
-  - Cache reaches capacity (LRU evicts oldest)
-  - User passes `refresh=1` query param
-  - Server restarts
+The interactive path does **not** cache result rows. Each interaction (load, filter,
+search, sort, page) runs, OBO:
 
-**Why:** Filters, search, and pagination run over the snapshot in-memory (no re-query). Every page interaction or filter change is fast. The snapshot is scoped to a single date, so it fits in memory even for large reports (typically 10k–100k rows per date).
+- a `COUNT(*)` over the report query (with the active date/filters/search) for the pager total, and
+- one page — `SELECT ... FROM ( source_query ) [WHERE …] ORDER BY <sort> LIMIT <size> OFFSET <page*size>`.
+
+`refresh=1` simply re-runs the query. Because only one page is ever fetched, a
+multi-million-row report never materializes in the app. Trade-offs to know:
+deep `OFFSET` pays a rescan (keyset pagination is a future optimization); `ORDER BY`
+benefits from a unique tiebreaker for perfectly stable page boundaries; and a
+`COUNT(*)` runs per interaction (cache/approx-count is a possible optimization on
+very large sources).
 
 ### Report registry cache
 
@@ -252,8 +249,8 @@ Every download follows this order:
 4. Re-check group membership (403, server-side)
 5. Validate ack + justification (400)
 6. Validate date (400)
-7. Get per-user snapshot (503 if OBO read fails)
-8. Apply filters + search
+7. Run the filtered/searched query OBO — all matching rows bounded by the spill cap, plus an exact `COUNT` (503 if the OBO read fails)
+8. Size policy (inline / spill-to-volume / 413)
 9. Build file bytes (CSV/XLSX)
 10. **Write exactly one audit row as the app SP** (must SUCCEED before returning file)
 11. Return file attachment
@@ -297,12 +294,10 @@ User's browser                     Databricks workspace
 │        ├─ Extract token from header
 │        ├─ Load report_config (SP client, TTL-cached)
 │        │  └─ SQL warehouse (as app SP): SELECT * FROM report_config
-│        ├─ Read dates (OBO user client)
-│        │  └─ SQL warehouse (as user): SELECT DISTINCT date FROM table
-│        ├─ Ensure per-user snapshot
-│        │  └─ SQL warehouse (as user): SELECT cols ∪ filters FROM table WHERE date = :date
-│        │     → cached in _snapshot_cache[(user, report, date)]
-│        ├─ Apply filters in-memory (no re-query)
+│        ├─ Read dates + filter options (OBO user client)
+│        │  └─ SQL warehouse (as user): SELECT DISTINCT … per filter field
+│        ├─ COUNT + first page (OBO user client)
+│        │  └─ SQL warehouse (as user): COUNT(*) + SELECT … LIMIT :size OFFSET 0
 │        ├─ Render report.html full page
 │        └─ Return HTML
 │           ↓
@@ -312,10 +307,9 @@ User's browser                     Databricks workspace
 │           └─ FastAPI main.py (route: GET /report/{report_id}/table)
 │              ├─ Extract token
 │              ├─ Validate requested date
-│              ├─ Get per-user snapshot (cache hit)
-│              ├─ Apply filter/search/pagination in-memory
+│              ├─ COUNT + one page via SQL (active filters/search/sort pushed down, OBO)
 │              ├─ Render _rows.html fragment
-│              └─ Return HTML (via HTMX, swap into <tbody>)
+│              └─ Return HTML (JS fetch swaps into <tbody>)
 │
 ├─ POST /download (form submit)
 │  └─ FastAPI main.py (route: POST /download)
@@ -324,8 +318,7 @@ User's browser                     Databricks workspace
 │     ├─ Resolve report
 │     ├─ Re-check group membership (OBO me() call)
 │     ├─ Validate ack + justification
-│     ├─ Get per-user snapshot (cache hit)
-│     ├─ Apply filters/search (all rows, no pagination)
+│     ├─ Run filtered/searched query OBO (all rows, bounded by spill cap) + COUNT
 │     ├─ Build CSV/XLSX bytes
 │     ├─ Write audit row
 │     │  └─ SQL warehouse (as app SP): INSERT INTO download_audit VALUES (...)
@@ -341,7 +334,7 @@ User's browser                     Databricks workspace
 | Decision | Rationale |
 |----------|-----------|
 | OBO reads as user | Enforces UC access control; prevents privilege escalation |
-| Per-user snapshot cache | Filters/search/paging are fast in-memory; no re-query per interaction |
+| Server-side SQL paging | Filter/search/sort/paginate pushed into SQL (COUNT + LIMIT/OFFSET per request); a large report never materializes in the app |
 | Report registry TTL-cached | Config changes appear within 5 min; app startup is fast |
 | Audit-first | No audit row = no file; ensures every download is logged before export |
 | Config-driven reports | Zero code change to add/edit/reorder reports; registry is the source of truth |

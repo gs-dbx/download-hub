@@ -27,7 +27,7 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Must pass: 298 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
+Must pass: 323 passed, 1 skipped. All modules except `main.py` are testable without the SDK.
 
 ## How to add a report (no code change)
 

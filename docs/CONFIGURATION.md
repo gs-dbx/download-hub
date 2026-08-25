@@ -81,7 +81,7 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `kind` | STRING | `query` (default) or `volume`. Selects the report type below. |
 | `source_query` | STRING | **Query reports:** a full single-statement `SELECT` (wrapped as `FROM ( … ) AS _q`). NULL for volume reports. (Replaces the retired `source_fqn`.) |
 | `volume_root` | STRING | **Volume reports:** pinned UC Volume root, e.g. `/Volumes/<catalog>/<schema>/<volume>`. NULL for query reports. |
-| `date_field` | STRING | Optional column name for the date scope (must be TIMESTAMP/DATE; bare identifier). |
+| `date_field` | STRING | Optional date/timestamp column (bare identifier). Treated as a filter: it drives a date dropdown (with an "All dates" option) and is bound into the SQL `WHERE`. |
 | `columns_json` | STRING | JSON array of column objects (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of `{"field", "label"}` objects (see below). May be empty `[]` or NULL. |
 | `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). |
@@ -130,7 +130,7 @@ Each object has:
 - **`field`** (STRING, required) — source column name to filter on (bare SQL identifier). **Must be selectable from `source_query`.** If the column doesn't exist, the OBO read will fail.
 - **`label`** (STRING, required) — dropdown label shown on the UI.
 
-**Important:** Every filter field MUST be projectable (i.e., it must exist as a real column on the source table). The per-user snapshot SELECT projects `display_columns ∪ filter_fields`, so a missing field breaks the query.
+**Important:** Every filter field MUST exist in the report query's output. Filter values are bound into the SQL `WHERE` and each field's distinct values populate its dropdown, so a field the `source_query` doesn't return breaks the read.
 
 ### Identifier allowlist
 
@@ -259,7 +259,7 @@ The app will:
 1. Show this report as the second tab (display_order=2)
 2. Read from `main.finance.budget_summary` as the signed-in user (OBO)
 3. Display columns: Department, Budget, Spent, % Spent
-4. Offer filters: Org Unit, Cost Center (distinct values from the snapshot)
+4. Offer filters: Org Unit, Cost Center (distinct values via an OBO query)
 5. Order results by `department`
 6. Gate downloads to members of the `finance_budget_viewers` Databricks group
 7. Export CSV/XLSX with the disclaimer at the top

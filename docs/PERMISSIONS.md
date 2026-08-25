@@ -26,7 +26,7 @@ the Files API, so Unity Catalog enforces the user's own access:
 
 ## Download gating
 
-Download is generic — it applies to **every** report and exports the current filtered on-screen view from the per-user cache. It is allowed only when **both** conditions hold, re-checked server-side on every `POST /download`:
+Download is generic — it applies to **every** report and exports the current filtered on-screen view (fetched OBO via server-side SQL, all matching rows bounded by the spill cap). It is allowed only when **both** conditions hold, re-checked server-side on every `POST /download`:
 
 1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty). When off, `POST /download` returns 403 "Downloads are temporarily disabled." and the UI panel is hidden — independent of group membership.
 2. **Group membership:** the user is a member of the report's **effective download group**, determined from `current_user.me()` group display names.

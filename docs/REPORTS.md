@@ -24,7 +24,7 @@ A report is one of two **kinds** (the `kind` column; default `query`):
 | `kind` | STRING | `query` (default) or `volume`. |
 | `source_query` | STRING | **Query reports:** a full single-statement `SELECT` the app wraps as `FROM ( … ) AS _q` and layers date scope / filters / ORDER BY on. `NULL` for volume reports. |
 | `volume_root` | STRING | **Volume reports:** the pinned root path (`/Volumes/<catalog>/<schema>/<volume>[/subpath]`); users browse it and its subfolders, jailed to the root. `NULL` for query reports. |
-| `date_field` | STRING | The date/timestamp column a query report is scoped by (drives the date selector). Optional. |
+| `date_field` | STRING | Optional date/timestamp column, treated as a filter: it drives a date dropdown (with an "All dates" option) and is bound into the SQL `WHERE`. |
 | `columns_json` | STRING | JSON array of display columns (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of filter dropdowns (may be empty/omitted). |
 | `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). |
@@ -81,12 +81,13 @@ A JSON array of `{"field", "label"}` objects:
 ```
 
 Each filter renders a dropdown whose options are the distinct values of `field`
-in the current snapshot; every filter has an "All" option (no constraint).
+(from an OBO distinct-values query); every filter has an "All" option (no constraint).
+The selected value is bound into the SQL `WHERE`.
 
-> **The filter `field` must be projectable.** The per-user snapshot selects
-> `display columns ∪ filter fields`, so a filter field that is not a real column
-> the `source_query` returns will break the read. Filter fields do not need to
-> appear in `columns_json`, but they must be selectable from the query.
+> **The filter `field` must exist in the query output.** Filter values are bound
+> into the SQL `WHERE`, so a filter field that is not a real column the
+> `source_query` returns will break the read. Filter fields do not need to appear
+> in `columns_json`, but they must be selectable from the query.
 
 ## Configuring a volume report
 
@@ -139,7 +140,7 @@ table.
 
 ## Download applies to every report
 
-Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** (all matching rows, no pagination) from the per-user cache, with the data-handling disclaimer at the top of the file.
+Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** — the full filtered/searched result (all matching rows, bounded by the spill cap) fetched OBO via server-side SQL — with the data-handling disclaimer at the top of the file.
 
 - Gating: `downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
 - `effective_download_group(report)` = the report's `download_group` when set (stripped), else the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`). Set `download_group` to gate a specific report to a different Databricks group.

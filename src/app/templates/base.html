@@ -47,50 +47,53 @@
     </div>
   </header>
 
-  <!--
-    Tab nav across the enabled reports (LOCKED DECISION L4). Driven by the
-    nav_reports context list + active_report_id; both default to empty so
-    error.html (which may not supply them) still renders.
-  -->
   {#
-    Tab row: report tabs on the left, and — pushed to the top-right — the view
-    switcher (when the user can access >1 view) and the Admin link (admins only).
-    One integrated bar sharing the underline. Driven by nav_reports /
-    view_switcher / active_view_key / user_is_admin; all default to empty so
-    error.html still renders.
+    App shell. On report/volume pages (nav_reports non-empty) it's a two-column
+    layout: a LEFT SIDE-NAV rail listing the current view's reports (scales to
+    many without the old wrapping tab row), with the view switcher on top and the
+    Admin link at the bottom; the report/table content fills the main column.
+    On pages with no report nav (admin console, error) there is NO rail and main
+    renders exactly as before — a centered grid-container — so those layouts are
+    unchanged. Driven by nav_reports / view_switcher / active_report_id /
+    active_view_key / user_is_admin (all default-safe).
   #}
-  {% if nav_reports|default([]) or (view_switcher|default([])|length > 1) or user_is_admin|default(false) %}
-  <div class="app-tabrow grid-container">
-    <nav class="app-tabs" aria-label="Reports">
-      {% for r in nav_reports|default([]) %}
-      <a class="app-tab {% if r.report_id == active_report_id|default('') %}app-tab--active{% endif %}"
-         href="/report/{{ r.report_id }}">{{ r.title }}</a>
-      {% endfor %}
+  {% set _hasnav = (nav_reports | default([])) | length > 0 %}
+  <div class="app-shell{% if _hasnav %} grid-container app-shell--nav{% endif %}">
+    {% if _hasnav %}
+    <nav class="app-sidenav" aria-label="Reports">
+      <div class="app-sidenav__inner">
+        {% if (view_switcher | default([])) | length > 1 %}
+        <label class="app-sidenav__label" for="view-switcher">View</label>
+        <select class="usa-select app-sidenav__view" id="view-switcher" data-role="view-switcher">
+          {% for v in view_switcher %}
+          <option value="/report/{{ v.report_id }}"{% if v.view_key == active_view_key|default('') %} selected{% endif %}>{{ v.title }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <p class="app-sidenav__heading">Reports</p>
+        <ul class="app-sidenav__list">
+          {% for r in nav_reports %}
+          <li>
+            <a class="app-sidenav__link{% if r.report_id == active_report_id|default('') %} app-sidenav__link--active{% endif %}"
+               href="/report/{{ r.report_id }}"{% if r.report_id == active_report_id|default('') %} aria-current="page"{% endif %}>{{ r.title }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if user_is_admin|default(false) %}
+        <a class="app-sidenav__admin" href="/admin">
+          <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+            <use xlink:href="/static/uswds/img/sprite.svg#settings"></use>
+          </svg>
+          Admin
+        </a>
+        {% endif %}
+      </div>
     </nav>
-    <div class="app-tabrow__right">
-      {% if view_switcher|default([])|length > 1 %}
-      <label class="app-viewlabel" for="view-switcher">View</label>
-      <select class="usa-select app-viewselect" id="view-switcher" data-role="view-switcher">
-        {% for v in view_switcher %}
-        <option value="/report/{{ v.report_id }}"{% if v.view_key == active_view_key|default('') %} selected{% endif %}>{{ v.title }}</option>
-        {% endfor %}
-      </select>
-      {% endif %}
-      {% if user_is_admin|default(false) %}
-      <a class="app-admin-link" href="/admin">
-        <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
-          <use xlink:href="/static/uswds/img/sprite.svg#settings"></use>
-        </svg>
-        Admin
-      </a>
-      {% endif %}
-    </div>
+    {% endif %}
+    <main id="main-content" class="usa-section{% if _hasnav %} app-main{% else %} grid-container{% endif %}">
+      {% block content %}{% endblock %}
+    </main>
   </div>
-  {% endif %}
-
-  <main id="main-content" class="grid-container usa-section">
-    {% block content %}{% endblock %}
-  </main>
 
   <footer class="usa-footer usa-footer--slim">
     <div class="grid-container usa-footer__return-to-top">

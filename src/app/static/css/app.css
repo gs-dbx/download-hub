@@ -38,9 +38,10 @@ body {
   display: flex;
   align-items: center;
   gap: 1rem;
-  max-width: 64rem;
+  max-width: none;
   margin: 0 auto;
-  padding: 0.85rem 1rem;
+  padding: 0.85rem 2rem;
+  box-sizing: border-box;
 }
 
 .app-header__logo {
@@ -99,6 +100,12 @@ body {
   border-color: var(--app-border);
 }
 
+/* Allow long table cells to wrap; use overflow-wrap for long tokens. */
+.usa-table tbody td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* Right-align the numeric columns (2026 / 2025 / % Change). */
 .usa-table td.text-right,
 .usa-table th.text-right,
@@ -122,6 +129,10 @@ body {
   align-items: flex-start;
   gap: 1.5rem;
   margin-top: 1rem;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  padding: 0 2rem;
 }
 .app-sidenav {
   flex: 0 0 230px;
@@ -196,6 +207,16 @@ body {
 .app-main {
   flex: 1 1 auto;
   min-width: 0; /* allow the table's own overflow-x to work inside the flex row */
+}
+
+/* Admin console uses full-width fluid layout instead of grid-container. */
+.app-admin-main {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  padding: 0 2rem;
+  margin-left: 0;
+  margin-right: 0;
 }
 /* Stack the rail above the content on narrow screens; the report list becomes a
    horizontal wrap so it never eats the viewport height. */
@@ -595,7 +616,36 @@ select,
   gap: 0.75rem;
 }
 
+/* ---- Change log action pill tags ---- */
+.app-actiontag {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
 
+.app-actiontag--create {
+  background-color: rgba(26, 127, 55, 0.15);
+  color: var(--app-pos);
+}
+
+.app-actiontag--update {
+  background-color: rgba(26, 68, 128, 0.15);
+  color: var(--app-blue);
+}
+
+.app-actiontag--delete {
+  background-color: rgba(178, 29, 29, 0.15);
+  color: var(--app-neg);
+}
+
+.app-actiontag--set {
+  background-color: rgba(184, 134, 11, 0.15);
+  color: var(--app-accent);
+}
 
 /* ---- SQL warehouse status badge (header) ---- */
 .app-whstatus {

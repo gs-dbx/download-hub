@@ -2,6 +2,8 @@
 
 {% block title %}Admin{% endblock %}
 
+{% block main_class %} app-admin-main{% endblock %}
+
 {% block content %}
 {#
   Admin console (admin-group only), organized into tabs:
@@ -318,7 +320,17 @@
         </thead>
         <tbody>
           {% for row in config_audit_rows %}
-          <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          <tr>
+            {% for cell in row %}
+            {% set col_index = loop.index0 %}
+            {% set col_name = config_audit_columns[col_index] if col_index < config_audit_columns|length else '' %}
+            {% if col_name == 'action' %}
+            <td><span class="app-actiontag app-actiontag--{{ cell|lower }}">{{ cell }}</span></td>
+            {% else %}
+            <td>{{ cell }}</td>
+            {% endif %}
+            {% endfor %}
+          </tr>
           {% else %}
           <tr><td colspan="{{ config_audit_columns|length }}">No admin mutations recorded yet.</td></tr>
           {% endfor %}

@@ -58,7 +58,7 @@
     active_view_key / user_is_admin (all default-safe).
   #}
   {% set _hasnav = (nav_reports | default([])) | length > 0 %}
-  <div class="app-shell{% if _hasnav %} grid-container app-shell--nav{% endif %}">
+  <div class="app-shell{% if _hasnav %} app-shell--nav{% endif %}">
     {% if _hasnav %}
     <nav class="app-sidenav" aria-label="Reports">
       <div class="app-sidenav__inner">
@@ -90,7 +90,7 @@
       </div>
     </nav>
     {% endif %}
-    <main id="main-content" class="usa-section{% if _hasnav %} app-main{% else %} grid-container{% endif %}">
+    <main id="main-content" class="usa-section{% block main_class %}{% if _hasnav %} app-main{% else %} grid-container{% endif %}{% endblock %}">
       {% block content %}{% endblock %}
     </main>
   </div>

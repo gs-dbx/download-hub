@@ -34,6 +34,7 @@ from app.reports import (
     build_report_config_upsert,
     build_report_dates_query,
     build_report_query,
+    decide_action,
     normalize_agg,
     normalize_format,
     split_columns,
@@ -924,6 +925,19 @@ def test_normalize_agg_valid_blank_and_invalid():
     assert normalize_agg(None) == ""
     with pytest.raises(ValueError):
         normalize_agg("median")
+
+
+def test_decide_action_create_vs_update():
+    """decide_action returns 'create' or 'update' based on key presence."""
+    # Key exists -> "update"
+    assert decide_action({"report_1", "report_2"}, "report_1") == "update"
+    assert decide_action({"report_1", "report_2"}, "report_2") == "update"
+
+    # Key missing -> "create"
+    assert decide_action({"report_1", "report_2"}, "report_3") == "create"
+
+    # Empty set -> always "create"
+    assert decide_action(set(), "any_key") == "create"
 
 
 def test_parse_agg_column_and_derived_name():

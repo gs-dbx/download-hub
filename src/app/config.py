@@ -19,6 +19,42 @@ _DISABLED_VALUES: frozenset[str] = frozenset({"false", "0", "no", "off", ""})
 DEFAULT_APP_NAME: str = "Data Download Hub"
 DEFAULT_APP_LOGO: str = "/static/img/logo.svg"
 
+# Chrome text defaults — the top government banner and the footer note. Both are
+# admin-editable (System Config -> app_config keys ``banner_text`` /
+# ``footer_text``) and env-overridable (APP_BANNER_TEXT / APP_FOOTER_TEXT). Once
+# an admin SETS one — even to an empty string — that value wins verbatim (a blank
+# value stays blank / hides the element); the env value + these defaults apply
+# only until a value has ever been set. See :func:`resolve_chrome_text`.
+DEFAULT_BANNER_TEXT: str = "An official website of the United States government"
+DEFAULT_FOOTER_TEXT: str = "Synthetic data — for demonstration only."
+
+
+def resolve_chrome_text(
+    cfg_value: str | None, env_value: str | None, default: str
+) -> str:
+    """Return the effective banner/footer text (admin config wins, blank stays blank).
+
+    Unlike :func:`resolve_disclaimer`, an explicitly-set-but-empty admin value is
+    honored verbatim ("if blank, leave them blank") rather than falling back to a
+    default — so an admin can clear the banner/footer to hide it.
+
+    Args:
+        cfg_value: The ``app_config`` value for this key. ``None`` means the key
+            has NEVER been set (fall back to env/default); any string — including
+            ``""`` — means the admin set it and it wins verbatim.
+        env_value: The raw env override (``APP_BANNER_TEXT`` / ``APP_FOOTER_TEXT``),
+            or ``None`` if unset. Used only when ``cfg_value`` is ``None``.
+        default: The built-in fallback (:data:`DEFAULT_BANNER_TEXT` /
+            :data:`DEFAULT_FOOTER_TEXT`).
+
+    Returns:
+        ``cfg_value`` verbatim when it is not ``None`` (blank included); otherwise
+        ``env_value`` stripped if non-empty, else ``default``.
+    """
+    if cfg_value is not None:
+        return cfg_value
+    return (env_value or "").strip() or default
+
 
 def resolve_disclaimer(value: str | None, default: str) -> str:
     """Return the effective download acknowledgement text.

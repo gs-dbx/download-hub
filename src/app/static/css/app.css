@@ -27,6 +27,15 @@ body {
   color: var(--app-text);
 }
 
+/* ---- Centered government banner + footer text (configurable via System Config) ----
+   The banner/footer strings are admin-editable (app_config keys banner_text /
+   footer_text); these rules center them horizontally within their (page-centered)
+   containers. */
+.app-banner__inner { justify-content: center; }
+.app-banner__text { text-align: center; width: 100%; margin: 0; }
+.app-footer__inner { text-align: center; }
+.app-footer__text { text-align: center; }
+
 /* ---- Branded masthead (white, configurable logo) ---- */
 .app-header {
   background-color: #ffffff;

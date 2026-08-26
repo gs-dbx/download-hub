@@ -273,14 +273,26 @@
   <section class="app-admin__panel" data-panel="config" hidden>
     <h2 class="font-heading-lg">System configuration</h2>
     <p class="font-body-sm text-base measure-5">
-      The <strong>download disclaimer</strong> is shown in the download dialog and embedded at the top of every
-      exported file. It is stored in the <code>app_config</code> table and applies to all resources.
+      These settings are stored in the <code>app_config</code> table and apply to every page. The
+      <strong>download disclaimer</strong> is shown in the download dialog and embedded atop every exported file;
+      the <strong>banner</strong> and <strong>footer</strong> text appear centered at the top and bottom of the app
+      (leave either blank to hide it).
     </p>
     <form class="usa-form usa-form--large" id="config-form" data-role="config-form">
       <div class="app-field">
         <label class="usa-label" for="cfg-disclaimer">Download disclaimer</label>
         <textarea class="usa-textarea" id="cfg-disclaimer" name="disclaimer" rows="8">{{ current_disclaimer }}</textarea>
         <span class="usa-hint">Plain text. Line breaks are preserved in the export.</span>
+      </div>
+      <div class="app-field app-field--wide">
+        <label class="usa-label" for="cfg-banner">Top banner text</label>
+        <input class="usa-input" id="cfg-banner" name="banner_text" value="{{ current_banner_text }}" autocomplete="off">
+        <span class="usa-hint">Shown centered in the bar at the very top of every page. Leave blank to hide the banner entirely.</span>
+      </div>
+      <div class="app-field app-field--wide">
+        <label class="usa-label" for="cfg-footer">Footer text</label>
+        <input class="usa-input" id="cfg-footer" name="footer_text" value="{{ current_footer_text }}" autocomplete="off">
+        <span class="usa-hint">Shown centered in the footer at the bottom of every page. Leave blank for no footer note.</span>
       </div>
       <div class="app-formactions">
         <button class="usa-button" type="submit">Save configuration</button>

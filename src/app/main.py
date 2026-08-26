@@ -62,10 +62,13 @@ from cache import (
     filters_summary,
 )
 from config import (
+    DEFAULT_BANNER_TEXT,
+    DEFAULT_FOOTER_TEXT,
     app_logo,
     app_name,
     app_org_name,
     downloads_enabled,
+    resolve_chrome_text,
     resolve_disclaimer,
 )
 from errors import ReportDataError, friendly_error
@@ -132,6 +135,11 @@ _APP_LOGO = app_logo(os.environ.get("APP_LOGO"))
 _APP_ORG_NAME = app_org_name(os.environ.get("APP_ORG_NAME"), _APP_NAME)
 # Effective acknowledgement text: DOWNLOAD_DISCLAIMER env override, else default.
 _DISCLAIMER = resolve_disclaimer(os.environ.get("DOWNLOAD_DISCLAIMER"), DEFAULT_DISCLAIMER)
+# Env overrides for the top government banner + footer note (admin-editable at
+# runtime via System Config; see _effective_banner_text / _effective_footer_text).
+# Kept as raw values (may be None) so "unset" is distinguishable from "set-empty".
+_BANNER_TEXT_ENV = os.environ.get("APP_BANNER_TEXT")
+_FOOTER_TEXT_ENV = os.environ.get("APP_FOOTER_TEXT")
 # Admin group + download-group naming suffix (env-overridable; see auth.py).
 _ADMIN_GROUP = (os.environ.get("ADMIN_GROUP") or "").strip() or ADMIN_GROUP
 _DL_SUFFIX = (os.environ.get("DOWNLOAD_GROUP_SUFFIX") or "").strip() or DEFAULT_DOWNLOAD_SUFFIX
@@ -201,6 +209,37 @@ _views_cache: tuple[float, list[ReportView]] | None = None
 
 # App key/value config TTL cache (e.g. the admin-set download disclaimer).
 _config_cache: tuple[float, dict[str, str]] | None = None
+
+
+def _effective_banner_text() -> str:
+    """Return the effective top-banner text for template rendering.
+
+    Reads the last-loaded app_config snapshot synchronously (so it is callable as
+    a Jinja global on every page, including error pages) and resolves it via
+    :func:`config.resolve_chrome_text`: an admin-set ``banner_text`` wins verbatim
+    (blank stays blank), else the ``APP_BANNER_TEXT`` env value, else the default.
+    A cold cache (no config loaded yet) degrades to env/default.
+    """
+    cfg = _config_cache[1] if _config_cache is not None else {}
+    return resolve_chrome_text(cfg.get("banner_text"), _BANNER_TEXT_ENV, DEFAULT_BANNER_TEXT)
+
+
+def _effective_footer_text() -> str:
+    """Return the effective footer note for template rendering.
+
+    Mirrors :func:`_effective_banner_text` for the ``footer_text`` key /
+    ``APP_FOOTER_TEXT`` env / :data:`config.DEFAULT_FOOTER_TEXT`.
+    """
+    cfg = _config_cache[1] if _config_cache is not None else {}
+    return resolve_chrome_text(cfg.get("footer_text"), _FOOTER_TEXT_ENV, DEFAULT_FOOTER_TEXT)
+
+
+# Callable Jinja globals: re-evaluated each render so an admin edit (which
+# invalidates _config_cache) shows on the next page load without a redeploy.
+templates.env.globals.update(
+    banner_text=_effective_banner_text,
+    footer_text=_effective_footer_text,
+)
 
 # Fragment page-size options; "all" -> None ("All", one page).
 _PAGE_SIZES: dict[str, int | None] = {"25": 25, "50": 50, "100": 100, "all": None}
@@ -2116,8 +2155,12 @@ async def admin_page(request: Request) -> Response:
             {"message": str(exc), "nav_reports": [], "active_report_id": ""},
             status_code=503,
         )
-    # System Config: current effective disclaimer for the editor.
+    # System Config: current effective disclaimer + chrome text for the editor.
+    # _effective_disclaimer() warms _config_cache, so the banner/footer readers
+    # below reflect the stored values (blank included) rather than a cold default.
     current_disclaimer = await _effective_disclaimer()
+    current_banner_text = _effective_banner_text()
+    current_footer_text = _effective_footer_text()
     # Audit Log: recent downloads (SP read; tolerate a missing table).
     audit_columns = list(AUDIT_LOG_COLUMNS)
     audit_rows: list[list[str]] = []
@@ -2215,6 +2258,8 @@ async def admin_page(request: Request) -> Response:
             "views": views,
             "dl_suffix": _DL_SUFFIX,
             "current_disclaimer": current_disclaimer,
+            "current_banner_text": current_banner_text,
+            "current_footer_text": current_footer_text,
             "audit_columns": audit_columns,
             "audit_rows": audit_rows,
             "config_audit_columns": config_audit_columns,
@@ -2460,40 +2505,60 @@ async def admin_save_view(request: Request) -> Response:
 
 @app.post("/admin/config")
 async def admin_save_config(request: Request) -> Response:
-    """Set the download disclaimer (System Config tab; admin only; SP write).
+    """Set the System Config values (admin only; SP write).
+
+    Persists the admin-editable app_config keys — the download ``disclaimer``, the
+    top government ``banner_text``, and the ``footer_text`` note — each stored in
+    the ``app_config`` table (a database-backed setting, read at runtime with an
+    env/default fallback). Only the form fields actually submitted are written, so
+    an absent field never blanks a stored value; a field submitted EMPTY is stored
+    as ``""`` on purpose ("if blank, leave them blank" — blank banner/footer hide).
 
     Args:
-        request: The incoming request; form carries ``disclaimer``.
+        request: The incoming request; form may carry ``disclaimer``,
+            ``banner_text``, and/or ``footer_text``.
 
     Returns:
-        A JSON ``{"ok": true}`` on success, or ``{"error": "..."}`` (503).
+        A JSON ``{"ok": true, "saved": [keys]}`` on success, or ``{"error": ...}``
+        (400 invalid key / 503 write failed).
     """
     _token, email, _me_user = await _require_admin(request)
     form = await request.form()
-    disclaimer = str(form.get("disclaimer", ""))
-    try:
-        sql, param_dicts = build_app_config_upsert(
-            _env("APP_CATALOG"), _env("APP_SCHEMA"),
-            "download_disclaimer", disclaimer, email,
+    # (config_key, submitted form value). form.get -> None means the field was
+    # not submitted at all (leave the stored value untouched); "" means clear it.
+    updates = [
+        ("download_disclaimer", form.get("disclaimer")),
+        ("banner_text", form.get("banner_text")),
+        ("footer_text", form.get("footer_text")),
+    ]
+    saved: list[str] = []
+    for key, raw in updates:
+        if raw is None:
+            continue
+        value = str(raw)
+        try:
+            sql, param_dicts = build_app_config_upsert(
+                _env("APP_CATALOG"), _env("APP_SCHEMA"), key, value, email,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            await _run_sql_sp(sql, [StatementParameterListItem(**d) for d in param_dicts])
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        saved.append(key)
+        # Log each key set (non-fatal).
+        await _log_config_audit(
+            actor_email=email,
+            entity_type="app_config",
+            entity_key=key,
+            action="set",
+            summary=key,
+            payload_json=json.dumps({key: value}),
         )
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    try:
-        await _run_sql_sp(sql, [StatementParameterListItem(**d) for d in param_dicts])
-    except RuntimeError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=503)
     _invalidate_registry()
-    print(f"[download-hub] admin updated disclaimer by={email!r}")
-    # Log the mutation (non-fatal)
-    await _log_config_audit(
-        actor_email=email,
-        entity_type="app_config",
-        entity_key="download_disclaimer",
-        action="set",
-        summary="download_disclaimer",
-        payload_json=json.dumps({"download_disclaimer": disclaimer}),
-    )
-    return JSONResponse({"ok": True})
+    print(f"[download-hub] admin updated config {saved} by={email!r}")
+    return JSONResponse({"ok": True, "saved": saved})
 
 
 @app.get("/admin/audit.csv")

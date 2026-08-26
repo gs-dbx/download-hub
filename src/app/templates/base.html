@@ -12,20 +12,25 @@
   <script src="/static/uswds/js/uswds-init.min.js"></script>
 </head>
 <body>
+  {# Top banner text — a database-backed System Config setting (app_config key
+     banner_text; banner_text() is a Jinja global resolving stored value → env →
+     default). Rendered centered; if an admin clears it (blank), the whole banner
+     is omitted rather than showing an empty bar. #}
+  {% set _banner = banner_text() %}
+  {% if _banner %}
   <!-- USWDS government banner -->
   <section class="usa-banner" aria-label="Official government website">
     <div class="usa-accordion">
       <header class="usa-banner__header">
-        <div class="usa-banner__inner">
+        <div class="usa-banner__inner app-banner__inner">
           <div class="grid-col-fill tablet:grid-col-auto">
-            <p class="usa-banner__header-text">
-              An official website of the United States government
-            </p>
+            <p class="usa-banner__header-text app-banner__text">{{ _banner }}</p>
           </div>
         </div>
       </header>
     </div>
   </section>
+  {% endif %}
 
   <!--
     Branded masthead (white). The logo is a LOCAL asset whose path comes from the
@@ -95,10 +100,13 @@
     </main>
   </div>
 
+  {# Footer note — a database-backed System Config setting (app_config key
+     footer_text; footer_text() Jinja global). Centered; blank stays blank. The
+     footer_extra block (e.g. app version on /admin) is appended after it. #}
   <footer class="usa-footer usa-footer--slim">
-    <div class="grid-container usa-footer__return-to-top">
-      <p class="font-body-2xs text-base">
-        Synthetic data &mdash; for demonstration only.
+    <div class="grid-container usa-footer__return-to-top app-footer__inner">
+      <p class="font-body-2xs text-base app-footer__text">
+        {{ footer_text() }}
         {% block footer_extra %}{% endblock %}
       </p>
     </div>

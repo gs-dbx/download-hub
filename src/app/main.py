@@ -102,6 +102,7 @@ from reports import (
     build_report_view_delete,
     build_report_view_query,
     build_report_view_upsert,
+    decide_action,
     parse_report_config,
     parse_report_view,
     resolve_columns,
@@ -689,7 +690,7 @@ async def _log_config_audit(
         entity_type: The entity type (``report_config``, ``report_view``,
             ``app_config``).
         entity_key: The entity identifier.
-        action: The action taken (``upsert`` or ``set``).
+        action: The action taken (``create``, ``update``, ``delete``, or ``set``).
         summary: Short human label.
         payload_json: Compact JSON of the written values.
     """
@@ -708,9 +709,15 @@ async def _log_config_audit(
         )
         await _run_sql_sp(sql, [StatementParameterListItem(**d) for d in param_dicts])
     except Exception as exc:  # noqa: BLE001 - log and swallow
+        # Use os.environ.get (never _env) here: this handler MUST NOT raise —
+        # _env would raise on an unset var, turning the non-fatal audit-logging
+        # path into a 500 after an otherwise-successful admin write.
+        _cat = os.environ.get("APP_CATALOG", "?")
+        _sch = os.environ.get("APP_SCHEMA", "?")
         print(
             f"[download-hub] config_audit write failed (non-fatal): "
-            f"{entity_type}/{entity_key}: {exc}"
+            f"{entity_type}/{entity_key}: {exc}; hint: app SP needs MODIFY + SELECT on "
+            f"{_cat}.{_sch}.config_audit (table must exist)"
         )
 
 
@@ -2288,6 +2295,10 @@ async def admin_save_report(request: Request) -> Response:
         "view_key": str(form.get("view_key", "")).strip(),
         "updated_by": email,
     }
+    # Load current reports to determine if this is a create or update
+    configs = await _load_reports()
+    existing = {c.report_id for c in configs}
+    action = decide_action(existing, row["report_id"])
     try:
         sql, param_dicts = build_report_config_upsert(
             _env("APP_CATALOG"), _env("APP_SCHEMA"), row
@@ -2306,7 +2317,7 @@ async def admin_save_report(request: Request) -> Response:
         actor_email=email,
         entity_type="report_config",
         entity_key=row["report_id"],
-        action="upsert",
+        action=action,
         summary=row["title"],
         payload_json=json.dumps(payload),
     )
@@ -2418,6 +2429,10 @@ async def admin_save_view(request: Request) -> Response:
         in {"true", "on", "1", "yes"},
         "updated_by": email,
     }
+    # Load current views to determine if this is a create or update
+    views = await _load_views()
+    existing = {v.view_key for v in views}
+    action = decide_action(existing, row["view_key"])
     try:
         sql, param_dicts = build_report_view_upsert(
             _env("APP_CATALOG"), _env("APP_SCHEMA"), row
@@ -2436,7 +2451,7 @@ async def admin_save_view(request: Request) -> Response:
         actor_email=email,
         entity_type="report_view",
         entity_key=row["view_key"],
-        action="upsert",
+        action=action,
         summary=row["title"],
         payload_json=json.dumps(payload),
     )

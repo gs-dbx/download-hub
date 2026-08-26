@@ -96,6 +96,28 @@ def normalize_agg(raw: object) -> str:
         )
     return a
 
+
+def decide_action(existing_keys: set[str], key: str) -> str:
+    """Decide whether this is a create or update action.
+
+    Determines if an admin mutation is creating a new resource or updating an
+    existing one. Used by admin routes to distinguish ``"create"`` from
+    ``"update"`` in the audit log (instead of the generic ``"upsert"``).
+
+    Note: this returns "create" for a key not in ``existing_keys``, even if that
+    key is currently disabled (since :func:`_load_reports` / :func:`_load_views`
+    return only ENABLED rows). This is a best-effort audit classification;
+    re-enabling a disabled resource will read as "create" on its next save.
+
+    Args:
+        existing_keys: Set of currently-enabled keys (report_ids or view_keys).
+        key: The key being saved.
+
+    Returns:
+        ``"update"`` if ``key`` is in ``existing_keys``; ``"create"`` otherwise.
+    """
+    return "update" if key in existing_keys else "create"
+
 # The two report kinds. A "query" report reads a full SELECT (``source_query``);
 # a "volume" report browses/downloads files under a pinned UC Volume root
 # (``volume_root``). Parsing is tolerant: a missing/blank ``kind`` means "query"

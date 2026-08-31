@@ -46,11 +46,11 @@ Download
   ├─ 4. Re-check group membership (server-side defense)
   ├─ 5. Validate ack + justification
   ├─ 6. Validate date against OBO date list
-  ├─ 7. Run the filtered/searched query OBO (all matching rows, bounded by the spill cap) + exact COUNT
+  ├─ 7. Count the filtered/searched result OBO
   ├─ 8. Size policy: inline vs. spill-to-volume vs. 413
-  ├─ 9. Build CSV/XLSX file bytes
+  ├─ 9. Build within the direct cap, or page a large CSV to disk + volume
   ├─ 10. Write audit row (as app SP, BEFORE returning file)
-  └─ 11. Return file attachment (or HTTP 500 if audit fails)
+  └─ 11. Return an attachment or streamed retrieval link (or HTTP 500 if audit fails)
 ```
 
 ## Module map — Pure vs. I/O boundary
@@ -74,7 +74,8 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `_run_sql_sp_query()` — execute as SP (registry read)
 - `_run_sql_sp()` — execute as SP (audit write)
 - `_load_reports()` — read report registry, parse configs, TTL-cache
-- `_query_report_page()` — run `COUNT(*)` + one `LIMIT`/`OFFSET` page OBO (server-side paging); also used by download with `size` = spill cap
+- `_query_report_page()` — run `COUNT(*)` + one `LIMIT`/`OFFSET` page OBO (server-side paging)
+- `_query_report_rows()` — fetch a bounded page without repeating the count (large CSV staging)
 - `_report_filter_options()` — distinct values per filter field (OBO)
 - `_resolve_can_download()` — check kill switch + group membership
 
@@ -249,11 +250,11 @@ Every download follows this order:
 4. Re-check group membership (403, server-side)
 5. Validate ack + justification (400)
 6. Validate date (400)
-7. Run the filtered/searched query OBO — all matching rows bounded by the spill cap, plus an exact `COUNT` (503 if the OBO read fails)
+7. Count the filtered/searched result OBO before retrieving it (503 if the OBO read fails)
 8. Size policy (inline / spill-to-volume / 413)
-9. Build file bytes (CSV/XLSX)
+9. Build a direct file within its cap, or page a large CSV to temporary disk and upload it to the configured volume as a stream
 10. **Write exactly one audit row as the app SP** (must SUCCEED before returning file)
-11. Return file attachment
+11. Return the attachment or a user-scoped link that streams the saved file
 
 If step 10 fails for ANY reason (permission denied, table missing, network error, etc.), the download is blocked (HTTP 500, no file). This is audit-first and non-negotiable: no audit row = no file.
 
@@ -318,11 +319,11 @@ User's browser                     Databricks workspace
 │     ├─ Resolve report
 │     ├─ Re-check group membership (OBO me() call)
 │     ├─ Validate ack + justification
-│     ├─ Run filtered/searched query OBO (all rows, bounded by spill cap) + COUNT
-│     ├─ Build CSV/XLSX bytes
+│     ├─ Count the filtered/searched result OBO
+│     ├─ Build directly or page a large CSV to the export volume
 │     ├─ Write audit row
 │     │  └─ SQL warehouse (as app SP): INSERT INTO download_audit VALUES (...)
-│     └─ Return file attachment
+│     └─ Return file attachment or user-scoped retrieval link
 │        ↓
 │     downloads/daily_metrics_2026-08-14.csv
 ```

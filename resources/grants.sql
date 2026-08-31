@@ -44,6 +44,15 @@ GRANT USE CATALOG ON CATALOG main TO `download_hub_app_users_dl`;
 GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_app_users_dl`;
 GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_app_users_dl`;
 
+-- Large CSV delivery (only when APP_EXPORT_VOLUME is configured). Keep the
+-- volume private: grant only the app SP, not end-user download groups.
+-- GRANT USE CATALOG ON CATALOG <catalog>
+--   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+-- GRANT USE SCHEMA ON SCHEMA <catalog>.<schema>
+--   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+-- GRANT READ VOLUME, WRITE VOLUME ON VOLUME <catalog>.<schema>.<export_volume>
+--   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+
 -- ---------------------------------------------------------------------------
 -- App SERVICE PRINCIPAL. Reads the registry (report_config, report_view,
 -- app_config); writes the audit row and — for the /admin console — upserts the

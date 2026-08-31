@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+from typing import Iterable, TextIO
 
 # Dual-convention imports: the Apps runtime runs from ``src/app/`` with flat
 # imports; the pytest suite imports this module as ``app.exports`` with ``src``
@@ -110,19 +111,36 @@ def to_csv_bytes(
         UTF-8 encoded CSV bytes.
     """
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    write_csv(buf, columns, rows, disclaimer)
+    return buf.getvalue().encode("utf-8")
+
+
+def write_csv(
+    file: TextIO,
+    columns: list[ColumnSpec],
+    rows: Iterable[dict],
+    disclaimer: str = "",
+    *,
+    include_header: bool = True,
+) -> None:
+    """Write CSV rows incrementally without building the export in memory.
+
+    ``include_header=False`` supports appending later query pages to the same
+    file. This is the volume-delivery path for large exports.
+    """
+    writer = csv.writer(file)
     # Only emit the disclaimer block + blank separator when there is disclaimer
     # text; an empty/blank disclaimer (e.g. the admin audit-log export) must NOT
     # produce a leading blank row before the header, or parsers see a blank
     # header and misaligned columns.
-    if disclaimer.strip():
+    if include_header and disclaimer.strip():
         for line in disclaimer.splitlines():
             writer.writerow([f"# {line}"])
         writer.writerow([])  # blank separator row
-    writer.writerow([c.label for c in columns])
+    if include_header:
+        writer.writerow([c.label for c in columns])
     for row in rows:
         writer.writerow([cell_text(row.get(c.name), c.format) for c in columns])
-    return buf.getvalue().encode("utf-8")
 
 
 def to_xlsx_bytes(

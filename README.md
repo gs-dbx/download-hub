@@ -51,6 +51,7 @@ docs/
   ARCHITECTURE.md       Request flow, module map, caching, auth model
   CONFIGURATION.md      Environment variables, report_config schema, worked example
   DEPLOY.md             Bundle validate/deploy/run, groups, grants, kill switch
+  URLS.md               User-facing URLs, internal routes, parameters, responses
   PERMISSIONS.md        OBO model, download gating, audit, account-level federation
   OFFLINE.md            Air-gap packaging, wheelhouse, local assets
   MIGRATION.md          Deploying to another environment
@@ -178,6 +179,7 @@ See `docs/REPORTS.md` and `docs/CONFIGURATION.md` for the `report_config` schema
 - **`docs/PERMISSIONS.md`** — OBO reads, download gating, audit-first, group resolution
 - **`docs/OFFLINE.md`** — air-gap packaging, vendored assets, wheelhouse refresh
 - **`docs/MIGRATION.md`** — deploying to another environment
+- **`docs/URLS.md`** — URL structure, route parameters, and endpoint behavior
 - **`.github/copilot-instructions.md`** — GitHub Copilot guide (code boundaries, patterns, rules)
 
 ## Key decisions (locked)

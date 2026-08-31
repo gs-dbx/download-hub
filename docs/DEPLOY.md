@@ -167,7 +167,18 @@ env:
     value: "/static/img/logo.svg"
   - name: DOWNLOADS_ENABLED
     value: "true"   # false/0/no/off disables downloads
+  - name: APP_EXPORT_VOLUME
+    value: "/Volumes/<catalog>/<schema>/<volume>"
 ```
+
+For large-result delivery, create that volume first and grant only the app
+service principal `READ VOLUME` and `WRITE VOLUME`, plus catalog/schema usage.
+Do not grant end-user download groups direct volume access; the app performs
+ownership and authorization checks before proxying retrieval. Verify upload and
+retrieval while signed in as a member of each group. Configure a scheduled
+retention policy or cleanup job for the export
+volume; each successful large export uses a unique audit-ID directory so it is
+never silently overwritten.
 
 Then redeploy and restart:
 

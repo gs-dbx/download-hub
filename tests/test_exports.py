@@ -5,6 +5,8 @@ No fastapi, no databricks.sdk, no network. The XLSX test is guarded by
 (LOCKED DECISION L4).
 """
 
+import io
+
 import pytest
 
 from app.exports import (
@@ -12,6 +14,7 @@ from app.exports import (
     filename_for,
     sanitize_filename,
     to_csv_bytes,
+    write_csv,
 )
 from app.reports import ColumnSpec
 
@@ -89,6 +92,16 @@ def test_to_csv_bytes_whitespace_disclaimer_has_no_leading_blank_row():
     """A whitespace-only disclaimer is treated as empty (header first)."""
     lines = to_csv_bytes(_COLUMNS, _ROWS, "   \n  ").decode("utf-8").splitlines()
     assert lines[0] == "Metric,2026,2025,% Change"
+
+
+def test_write_csv_appends_pages_without_duplicate_header():
+    """Later result pages append rows without repeating CSV metadata."""
+    buf = io.StringIO()
+    write_csv(buf, _COLUMNS, _ROWS[:1], "notice")
+    write_csv(buf, _COLUMNS, _ROWS[1:], include_header=False)
+    text = buf.getvalue()
+    assert text.count("Metric,2026,2025,% Change") == 1
+    assert "Orders" in text and "Revenue" in text
 
 
 @pytest.mark.parametrize(

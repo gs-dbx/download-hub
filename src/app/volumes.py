@@ -242,19 +242,31 @@ def download_file(w: Any, root: str, subpath: str) -> tuple[bytes, str]:
     return data, posixpath.basename(abspath)
 
 
-def upload_file(w: Any, root: str, subpath: str, data: bytes) -> str:
+def open_download(w: Any, root: str, subpath: str) -> tuple[Any, str]:
+    """Open a volume file as a readable stream without buffering its contents."""
+    root_clean = _clean_root(root)
+    abspath = resolve_within_root(root_clean, subpath)
+    if abspath == root_clean:
+        raise ValueError("refusing to download the volume root as a file")
+    _guard_not_directory(w, abspath)
+    resp = w.files.download(file_path=abspath)
+    return getattr(resp, "contents", resp), posixpath.basename(abspath)
+
+
+def upload_file(w: Any, root: str, subpath: str, data: Any) -> str:
     """Write ``data`` to ``subpath`` under the root as the signed-in user (OBO).
 
     Used for over-cap exports: instead of returning a huge file in the HTTP
-    response, the app spills it to a UC volume the user owns. Resolves + jails
+    response, the app spills it to an app-private UC volume. Resolves + jails
     ``subpath`` within the root (rejecting the root itself), then uploads with
     overwrite so a re-run replaces a prior spill of the same name.
 
     Args:
-        w: A per-user ``WorkspaceClient`` (OBO). Only ``w.files`` is used.
+        w: The app service-principal ``WorkspaceClient``. Only ``w.files`` is used.
         root: The pinned export volume root (validated + normalized here).
         subpath: The destination file, root-relative.
-        data: The file bytes to write.
+        data: File bytes or a readable binary stream. Streams allow large
+            exports to upload without being copied into app memory.
 
     Returns:
         The resolved absolute ``/Volumes/...`` path the bytes were written to.

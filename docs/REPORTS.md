@@ -140,7 +140,7 @@ table.
 
 ## Download applies to every report
 
-Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** — the full filtered/searched result (all matching rows, bounded by the spill cap) fetched OBO via server-side SQL — with the data-handling disclaimer at the top of the file.
+Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** with the data-handling disclaimer at the top. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume.
 
 - Gating: `downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
 - `effective_download_group(report)` = the report's `download_group` when set (stripped), else the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`). Set `download_group` to gate a specific report to a different Databricks group.

@@ -17,6 +17,11 @@ All app configuration comes from environment variables in `src/app/app.yaml`. Se
 | `DOWNLOAD_GROUP_SUFFIX` | `_dl` | Suffix appended to a report's `view_key` to derive its download group when `download_group` is unset |
 | `DOWNLOADS_ENABLED` | `true` | Global kill switch (`false`/`0`/`no`/`off` disables downloads) |
 | `DOWNLOAD_DISCLAIMER` | (see below) | Custom data-handling notice (optional; falls back to built-in generic) |
+| `MAX_DOWNLOAD_ROWS` | `100000` | Largest CSV built in app memory and returned directly |
+| `MAX_XLSX_ROWS` | `25000` | Largest Excel export; larger requests direct users to CSV |
+| `APP_EXPORT_VOLUME` | (unset) | App-private `/Volumes/...` destination for large CSV delivery |
+| `MAX_SPILL_ROWS` | `1000000` | Largest CSV eligible for volume delivery |
+| `EXPORT_PAGE_ROWS` | `10000` | Rows processed at a time while producing a large CSV |
 
 ### How branding resolves
 
@@ -65,6 +70,19 @@ Effect:
 - Independent of group membership — applies to everyone
 
 Re-enable by setting back to `"true"` (or omitting it, defaults to `"true"`).
+
+### Large-result delivery
+
+The app counts matching rows before retrieving the result. Results within the
+direct limit download normally. Larger CSV results are queried in bounded pages,
+written to temporary disk, uploaded to `APP_EXPORT_VOLUME` as the app service
+principal, and streamed back through a user-scoped retrieval link. End users
+need no direct volume privileges. This avoids holding the
+result or finished file in app memory. Excel requests above `MAX_XLSX_ROWS` ask
+the user to choose CSV. If no export volume is configured, the UI explains how
+to narrow the result and tells administrators which setting is required. Each
+file is stored below a collision-resistant owner key and unique audit ID, so
+concurrent exports cannot overwrite one another.
 
 ---
 

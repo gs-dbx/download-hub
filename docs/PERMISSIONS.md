@@ -15,7 +15,7 @@ A `kind = 'volume'` report browses a pinned UC Volume root (`volume_root`). Both
 the folder listing and the file download run **as the signed-in user (OBO)** via
 the Files API, so Unity Catalog enforces the user's own access:
 
-- Grant the report's **view group** (and its download group) **`READ VOLUME`** on
+- Grant the resource's **collection access group** (and its download group) **`READ VOLUME`** on
   the volume so members can list + download:
   `GRANT READ VOLUME ON VOLUME <catalog>.<schema>.<volume> TO \`<group>\`;`
 - Every browsed path is **root-relative and path-jailed** server-side (a `..`,
@@ -51,7 +51,7 @@ Two Databricks groups gate the app:
 | `download_hub_app_users` | app access — SELECT on `{APP_CATALOG}.{APP_SCHEMA}.report_config` and report source tables via OBO |
 | `download_hub_download_users` | the gated download feature (can export data) |
 
-Access is granted by adding a user to the corresponding group (see [DEPLOY.md](DEPLOY.md) §5). App-users can view any report their user account has UC SELECT access to; download-users additionally clear the download gate and can export data (subject to UC access control on the source table).
+Access is granted by adding a user to the corresponding resource collection access group (see [DEPLOY.md](DEPLOY.md) §5). App-users can view any resource their user account has UC SELECT access to; download-users additionally clear the download gate and can export data (subject to UC access control on the source table).
 
 A report can optionally override the default download group via its `report_config.download_group` column — setting this to a different Databricks group name gates downloads for that specific report to only members of that group.
 

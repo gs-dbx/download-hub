@@ -109,7 +109,7 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `display_order` | INT | Sort order among enabled reports (1 = first tab, 2 = second, etc.). |
 | `enabled` | BOOLEAN | Whether the report is active (only `true` rows are shown). |
 | `download_group` | STRING | Optional per-report download group. If NULL, derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`). |
-| `view_key` | STRING | Databricks group granting VIEW access (also names the report's view/tab). |
+| `view_key` | STRING | Legacy storage name for the collection key: the Databricks group granting access and the resource's collection membership. |
 | `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (admin console stamps the editor's email). |
 
 Existing registry rows with `date_field` populated are migrated in memory: the
@@ -249,7 +249,11 @@ SET download_group = 'my_custom_group'
 WHERE report_id = 'my_report';
 ```
 
-When `download_group` is set (non-NULL, non-empty after stripping), the effective download group for that report is the value. Otherwise, it is derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`).
+When `download_group` is set (non-NULL, non-empty after stripping), the effective download group for that report is the value. Otherwise, it is derived from the resource collection's legacy `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`).
+
+The database retains the `report_view` table and `view_key` column for backward
+compatibility. In the product and documentation they represent resource
+collections and collection keys; no schema rename or data migration is needed.
 
 ---
 
@@ -281,7 +285,7 @@ VALUES (
   2,                                                     -- display_order (second tab)
   true,                                                  -- enabled
   'finance_budget_viewers',                              -- download_group (gate to this group)
-  'finance_report_viewers',                              -- view_key (group granting view access)
+  'finance_report_viewers',                              -- view_key (legacy name for collection access group)
   current_timestamp()                                    -- updated_at
 );
 ```

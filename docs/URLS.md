@@ -10,13 +10,28 @@ route is explicitly described as a health endpoint.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/` | Redirect to the first report visible to the signed-in user. |
+| `GET` | `/collection/{collection_key}` | Redirect to the first visible resource in a specific resource collection. |
 | `GET` | `/report/{report_id}` | Render a query report and its initial result page. |
 | `GET` | `/admin` | Render the administration console; admin-group membership is required. |
 
-A report URL can preserve the current view in its query string:
+Use a resource collection URL when sharing a collection rather than a specific
+resource:
 
 ```text
-https://<app-host>/report/daily_metrics?report_date=2026-08-31&q=revenue&page=2&size=50&sort=amount&dir=desc&region=west
+https://<app-host>/collection/finance_users
+```
+
+The collection key is stable: the route redirects each signed-in user to the
+first resource they can access in that collection. It returns `404` if the
+collection does not exist, `403` if the collection exists but the user cannot
+access any of its resources, and `401` when the forwarded identity token is
+missing. Collection keys are bare identifiers (letters, digits, and
+underscores; no leading digit).
+
+A report URL can preserve the current filtered results in its query string:
+
+```text
+https://<app-host>/report/daily_metrics?q=revenue&page=2&size=50&sort=amount&dir=desc&region=west
 ```
 
 Supported report parameters are:
@@ -82,7 +97,6 @@ rather than a query string. For example:
 
 ```text
 report_id=sales
-report_date=2026-08-31
 search=revenue
 region=west
 business_unit=consumer
@@ -101,10 +115,10 @@ download represents the current view.
 | Method | Path | Input/output |
 |---|---|---|
 | `GET` | `/report/{report_id}/table` | Returns table-row HTML for the report parameters above. Pagination metadata is returned in `X-Total-Rows`, `X-Total-Pages`, `X-Page`, and `X-Fetched-At`. |
-| `GET` | `/report/{report_id}/sql` | Returns JSON containing the effective SQL for the current date, filters, and sort. Requires report visibility. |
+| `GET` | `/report/{report_id}/sql` | Returns JSON containing the effective SQL for the current filters and sort. Requires resource visibility. |
 | `POST` | `/download` | Creates a gated and audited CSV or XLSX export from form data. |
 
-`POST /download` accepts `report_id`, `date`, `search`, `acknowledged`,
+`POST /download` accepts `report_id`, `search`, `acknowledged`,
 `justification`, `format` (`csv` or `xlsx`), and each configured filter field.
 A direct result is returned as an attachment. A large CSV is staged in the
 app-private export volume and returns JSON containing a user-scoped retrieval
@@ -152,14 +166,18 @@ routes accept browser form data and return JSON or a redirect as appropriate.
 | `POST` | `/admin/preview` | Validate and preview a proposed query. |
 | `POST` | `/admin/report` | Create or update a report configuration. |
 | `POST` | `/admin/report/delete` | Delete the report identified by `report_id`. |
-| `POST` | `/admin/view` | Create or update a report view. |
-| `POST` | `/admin/view/delete` | Delete the view identified by `view_key`. |
+| `POST` | `/admin/view` | Create or update a resource collection. |
+| `POST` | `/admin/view/delete` | Delete the resource collection identified by its legacy `view_key`. |
 | `POST` | `/admin/config` | Save disclaimer, banner, and footer settings. |
 | `GET` | `/admin/audit.csv` | Download the recent audit log as CSV. |
 
 These are application endpoints, not a stable external management API. Use the
 administration UI unless automating against the current implementation is an
 intentional maintenance decision.
+
+The `/admin/view*` route names and `view_key` form field are retained for
+backward compatibility. Product terminology calls these resource collections
+and collection keys.
 
 ## Health endpoints
 

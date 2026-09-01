@@ -155,7 +155,7 @@
     <div class="app-sqlmodal__panel" role="dialog" aria-modal="true"
          aria-labelledby="report-sql-heading">
       <div class="app-sqlmodal__head">
-        <h2 id="report-sql-heading" class="app-sqlmodal__title">Query for this view</h2>
+        <h2 id="report-sql-heading" class="app-sqlmodal__title">Query for these results</h2>
         <button type="button" class="app-sqlmodal__close" data-role="report-sql-close"
                 aria-label="Close">
           <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
@@ -167,10 +167,10 @@
         The effective query for what's on screen (date + filters + sort applied).
         Filtering/search also runs in-app over the cached results.
       </p>
-      <label class="usa-sr-only" for="report-sql-text">SQL query for this view</label>
+      <label class="usa-sr-only" for="report-sql-text">SQL query for these results</label>
       <textarea class="app-sql__text" id="report-sql-text" data-role="report-sql-text"
                 readonly rows="12" spellcheck="false"
-                aria-label="SQL query for this view">Loading…</textarea>
+                aria-label="SQL query for these results">Loading…</textarea>
     </div>
   </div>
   {% endif %}

@@ -1,4 +1,4 @@
-// admin.js — report/view admin console (admin-group only pages).
+// admin.js — resource/collection admin console (admin-group only pages).
 // Vanilla JS, no framework, no remote assets. Served at /static/js/admin.js.
 //
 // Two forms:
@@ -80,7 +80,7 @@
     });
   }
 
-  // ============================ Views ======================================
+  // ===================== Resource collections =============================
   var viewForm = byRole("view-form");
   if (viewForm) {
     viewForm.addEventListener("submit", function (evt) {
@@ -118,13 +118,13 @@
   var dlHint = byRole("download-hint");
   var viewSel = document.getElementById("r-view");
 
-  // Show the derived download group as a hint when the view changes + none set.
+  // Show the derived download group as a hint when the collection changes.
   function refreshDownloadHint() {
     var vk = viewSel ? viewSel.value : "";
     if (dlHint) {
       dlHint.textContent = vk
         ? "Leave blank to derive: " + vk + dlSuffix
-        : "Leave blank to derive from the view key.";
+        : "Leave blank to derive from the collection key.";
     }
   }
   if (viewSel) viewSel.addEventListener("change", refreshDownloadHint);

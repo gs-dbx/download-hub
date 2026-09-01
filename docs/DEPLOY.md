@@ -142,7 +142,7 @@ The app SP reads the registry and **writes** several tables (downloads, admin ed
 | Table | SP needs | Used by | If missing |
 |-------|----------|---------|------------|
 | `report_config` | SELECT, MODIFY | registry + admin save/delete report | admin resource edits fail |
-| `report_view` | SELECT, MODIFY | view switcher + admin save/delete view | admin view edits fail |
+| `report_view` | SELECT, MODIFY | resource collection switcher + admin save/delete collection | admin collection edits fail |
 | `app_config` | SELECT, MODIFY | System Config (disclaimer) | disclaimer save silently no-ops |
 | `download_audit` | SELECT, MODIFY | audit-first download logging | **downloads blocked** (audit-first HTTP 500) |
 | `config_audit` | SELECT, MODIFY | admin **Change Log** | change log **silently empty** |

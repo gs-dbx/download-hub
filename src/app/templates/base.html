@@ -68,10 +68,10 @@
     <nav class="app-sidenav" aria-label="Reports">
       <div class="app-sidenav__inner">
         {% if (view_switcher | default([])) | length > 1 %}
-        <label class="app-sidenav__label" for="view-switcher">View</label>
+        <label class="app-sidenav__label" for="view-switcher">Resource collection</label>
         <select class="usa-select app-sidenav__view" id="view-switcher" data-role="view-switcher">
           {% for v in view_switcher %}
-          <option value="/report/{{ v.report_id }}"{% if v.view_key == active_view_key|default('') %} selected{% endif %}>{{ v.title }}</option>
+          <option value="/collection/{{ v.view_key }}"{% if v.view_key == active_view_key|default('') %} selected{% endif %}>{{ v.title }}</option>
           {% endfor %}
         </select>
         {% endif %}

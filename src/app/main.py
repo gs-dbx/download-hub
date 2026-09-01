@@ -116,6 +116,7 @@ from reports import (
     parse_report_view,
     resolve_columns,
     split_columns,
+    validate_identifier,
 )
 from volumes import (
     breadcrumbs as _vol_breadcrumbs,
@@ -789,7 +790,7 @@ async def _log_config_audit(
 def _visible_reports(
     configs: list[ReportConfig], me_user
 ) -> list[ReportConfig]:
-    """Return the reports the user may SEE (view group OR download group).
+    """Return resources the user may see (collection or download group).
 
     Args:
         configs: All enabled reports (sorted).
@@ -854,7 +855,7 @@ def _reports_in_view(
         view_key: The active view's key.
 
     Returns:
-        The visible reports whose effective view group is ``view_key``.
+        The visible resources whose effective collection group is ``view_key``.
     """
     return [c for c in visible if effective_view_group(c) == view_key]
 def _nav_reports(configs: list[ReportConfig]) -> list[dict]:
@@ -1194,7 +1195,7 @@ async def warehouse_health() -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Response:
-    """Redirect to the first report of the user's first accessible view.
+    """Redirect to the first resource in the user's first accessible collection.
 
     Args:
         request: The incoming request.
@@ -1234,7 +1235,76 @@ async def index(request: Request) -> Response:
             "error.html",
             {
                 "message": "You do not have access to any reports. Ask an "
-                "administrator to add you to a view group.",
+                "administrator to add you to a resource collection access group.",
+                "nav_reports": [],
+                "active_report_id": "",
+            },
+            status_code=403,
+        )
+    return RedirectResponse(f"/report/{visible[0].report_id}", status_code=307)
+
+
+@app.get("/collection/{collection_key}")
+async def collection_landing(request: Request, collection_key: str) -> Response:
+    """Redirect a stable resource-collection URL to its first visible resource."""
+    try:
+        collection_key = validate_identifier(collection_key)
+    except ValueError:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": "That resource collection URL is invalid.",
+                "nav_reports": [],
+                "active_report_id": "",
+            },
+            status_code=404,
+        )
+    try:
+        configs = await _load_reports()
+        collections = await _load_views()
+    except RuntimeError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": str(exc), "nav_reports": [], "active_report_id": ""},
+            status_code=503,
+        )
+    exists = any(
+        v.enabled and v.view_key == collection_key for v in collections
+    ) or any(
+        c.enabled and effective_view_group(c) == collection_key
+        for c in configs
+    )
+    if not exists:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": f"Resource collection {collection_key!r} was not found.",
+                "nav_reports": [],
+                "active_report_id": "",
+            },
+            status_code=404,
+        )
+    try:
+        token = extract_user_token(request.headers)
+    except PermissionError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": str(exc), "nav_reports": [], "active_report_id": ""},
+            status_code=401,
+        )
+    visible = _reports_in_view(
+        _visible_reports(configs, await _me(token)), collection_key
+    )
+    if not visible:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": "You do not have access to any resources in this collection.",
                 "nav_reports": [],
                 "active_report_id": "",
             },
@@ -1312,7 +1382,8 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
             },
             status_code=403,
         )
-    # Tabs = the current view's visible reports; switcher = all accessible views.
+    # Navigation is the current collection; switcher includes all accessible
+    # collections.
     active_view = effective_view_group(report)
     nav_reports = _nav_reports(_reports_in_view(visible, active_view))
     view_switcher = _views_for_user(views, visible)
@@ -1488,7 +1559,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     email = extract_user_email(request.headers)
 
     # Visibility re-check (defense in depth): the caller must belong to the
-    # report's view group or download group.
+    # resource's collection access group or download group.
     me_user = await _me(token)
     if me_user is None or not can_view(me_user, report, _DL_SUFFIX):
         return HTMLResponse(
@@ -2167,7 +2238,7 @@ async def volume_download(request: Request, report_id: str) -> Response:
 
 
 # ======================================================================
-# Admin console (report + view registry management)
+# Admin console (resource + collection registry management)
 # ======================================================================
 # Gated by membership of the admin group (env ADMIN_GROUP). Reads run OBO for
 # the query PREVIEW (the admin only previews data they can access); WRITES run
@@ -2205,7 +2276,7 @@ async def _require_admin(request: Request):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request) -> Response:
-    """Render the admin console: manage views and reports.
+    """Render the admin console: manage resource collections and resources.
 
     Args:
         request: The incoming request.

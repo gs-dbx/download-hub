@@ -63,21 +63,21 @@ There are three kinds of groups:
 
 | Group | Default/example | Purpose |
 |---|---|---|
-| View group | `download_hub_app_users` | A report view's `view_key`; members can see reports in that view. |
-| Download group | `download_hub_download_users` for the seeded report; otherwise an explicit `download_group` or derived `<view_key>_dl` | Members can see the view and download its reports. |
+| Collection access group | `download_hub_app_users` | A resource collection's key (stored as `view_key`); members can see resources in that collection. |
+| Download group | `download_hub_download_users` for the seeded resource; otherwise an explicit `download_group` or derived `<view_key>_dl` | Members can see the collection and download its resources. |
 | Administrator group | `download_hub_admin_users` | Members can open `/admin` and mutate app configuration through the UI. |
 
 Create these as account-level/federated groups when Unity Catalog requires it.
 Add users to the smallest necessary group. Download membership does not replace
 source-data privileges; downloads still query OBO as the user.
 
-For additional views, create another view group and normally a matching `_dl`
+For additional resource collections, create another collection access group and normally a matching `_dl`
 group. The `DOWNLOAD_GROUP_SUFFIX` environment variable changes that suffix.
 
 ## 5. Grant access to the Databricks App
 
 In the workspace UI, open **Apps → download-hub → Permissions** and grant
-`CAN USE` to every view group, download group, and administrator group that must
+`CAN USE` to every collection access group, download group, and administrator group that must
 open the app. Reserve `CAN MANAGE` for deployment/application operators.
 
 This app-level permission is separate from group membership stored in
@@ -95,7 +95,7 @@ Set the same warehouse ID in:
 
 Grant `CAN USE` on the warehouse to:
 
-- every view/download group whose members run report queries;
+- every collection/download group whose members run resource queries;
 - the administrator group if admins will preview queries;
 - any other user group expected to execute OBO report reads.
 
@@ -195,7 +195,7 @@ Registry and audit grants:
 | Object | App SP privileges | Why |
 |---|---|---|
 | `report_config` | `SELECT`, `MODIFY` | Load reports; admin save/delete. |
-| `report_view` | `SELECT`, `MODIFY` | Load views; admin save/delete. |
+| `report_view` | `SELECT`, `MODIFY` | Load resource collections; admin save/delete. The table name is retained for compatibility. |
 | `app_config` | `SELECT`, `MODIFY` | Load/save banner, footer, and disclaimer. |
 | `download_audit` | `SELECT`, `MODIFY` | Audit-first download logging and admin audit view. |
 | `config_audit` | `SELECT`, `MODIFY` | Configuration change log. |
@@ -212,8 +212,8 @@ schema, group, source-object, and service-principal placeholders.
 
 ## 10. Grant report users access to source data
 
-Query reports execute as the signed-in user. For each report/view, grant both
-the view group and its download group the privileges required by the report's
+Query resources execute as the signed-in user. For each resource collection, grant both
+the collection access group and its download group the privileges required by the resource's
 `source_query`:
 
 ```sql
@@ -258,7 +258,7 @@ directories and are not overwritten.
 ### User-browsable volume reports
 
 A `kind='volume'` report points at a configured `volume_root`. Listing and file
-downloads run OBO as the signed-in user. Grant the report's view and download
+downloads run OBO as the signed-in user. Grant the resource's collection and download
 groups `USE CATALOG`, `USE SCHEMA`, and `READ VOLUME` on that specific volume.
 Do not grant `WRITE VOLUME` unless users need it outside this application.
 
@@ -269,7 +269,7 @@ An administrator needs app `CAN USE`, membership in `ADMIN_GROUP`, warehouse
 
 For a query report:
 
-1. Create/select a view. Its `view_key` must match the Databricks view group.
+1. Create/select a resource collection. Its collection key (stored as `view_key`) must match the Databricks collection access group.
 2. Enter a single `SELECT` as `source_query`.
 3. Choose **Run query**. The app reads result-schema metadata, displays each SQL
    type, and suggests `int`, `float`, or `text`; the admin can override it.
@@ -287,17 +287,17 @@ query output and use a bare identifier. Filter values are bound parameters.
 Test with actual identities, not only the deployment operator:
 
 - [ ] App reports active and the expected `APP_VERSION` appears in the footer.
-- [ ] View-only user can open the app and sees only intended views/reports.
+- [ ] Collection-only user can open the app and sees only intended collections/resources.
 - [ ] Unauthorized user cannot open the app or report.
 - [ ] Typical user can run the report query and populate every filter.
-- [ ] Download-group user sees the button; view-only user does not.
+- [ ] Download-group user sees the button; collection-only user does not.
 - [ ] Direct CSV and XLSX downloads require acknowledgement and justification.
 - [ ] A large CSV is saved to the private export volume and retrieved through
       the app; the user has no direct volume grant.
 - [ ] A configured volume report can be browsed and downloaded by authorized
       users but not by others.
 - [ ] `/admin` is available only to the administrator group.
-- [ ] Admin report/view/config changes appear and create `config_audit` rows.
+- [ ] Admin resource/collection/config changes appear and create `config_audit` rows.
 - [ ] Every successful download creates one `download_audit` row.
 - [ ] Disabling `DOWNLOADS_ENABLED` hides and blocks downloads.
 - [ ] Export-volume retention is scheduled and monitored.

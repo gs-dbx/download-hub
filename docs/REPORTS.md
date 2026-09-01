@@ -31,7 +31,7 @@ A report is one of two **kinds** (the `kind` column; default `query`):
 | `display_order` | INT | Sort order among enabled reports (1 = first tab). |
 | `enabled` | BOOLEAN | Whether the report is active. |
 | `download_group` | STRING | Optional per-report download group (`NULL` → derived from `view_key` + suffix). |
-| `view_key` | STRING | The Databricks group that grants VIEW access to the report (also names its view/tab). |
+| `view_key` | STRING | Legacy storage name for the collection key: the Databricks group granting access and the resource's collection membership. |
 | `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (the admin console stamps the editor's email). |
 
 ### `columns_json`
@@ -107,7 +107,7 @@ VALUES
    current_timestamp(), 'seed');
 ```
 
-Users who are members of `view_key` (or its download group) see the report; they
+Users who are members of the collection group stored in `view_key` (or its download group) see the resource; they
 browse folders/subfolders under the root (jailed to it) and download individual
 files. Grant the groups `READ VOLUME` on the root — see [PERMISSIONS.md](PERMISSIONS.md).
 

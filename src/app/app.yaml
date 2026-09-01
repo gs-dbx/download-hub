@@ -25,7 +25,7 @@ env:
   - name: APP_LOGO
     value: "/static/img/logo.svg"
   - name: APP_VERSION
-    value: "0.5.0"
+    value: "0.6.0"
   # Workspace groups used for the admin console and derived download groups.
   - name: ADMIN_GROUP
     value: "download_hub_admin_users"

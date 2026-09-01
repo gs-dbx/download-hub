@@ -7,8 +7,8 @@
 {% block content %}
 {#
   Admin console (admin-group only), organized into tabs:
-    * Report Views  — view_key (= Databricks view group) + title + order.
-    * Reports       — full query + picked display columns + filters, per view.
+    * Resource Collections — view_key (= Databricks access group) + title + order.
+    * Resources            — full query + picked columns + filters, per collection.
     * System Config — the download disclaimer (stored in the app_config table).
     * Audit Log     — recent downloads + justifications, downloadable as CSV.
   Writes go to /admin/{view,report,config} (SP writes); the report builder
@@ -27,12 +27,12 @@
   <div class="app-hero">
     <h1 class="font-heading-xl app-hero__title">Administration</h1>
     <p class="usa-intro font-body-sm app-hero__sub">
-      Manage views, resources, the download disclaimer, and review the audit log. Changes take effect immediately.
+      Manage resource collections, resources, the download disclaimer, and review the audit log. Changes take effect immediately.
     </p>
   </div>
 
   <nav class="app-admintabs" aria-label="Admin sections">
-    <button type="button" class="app-admintab app-admintab--active" data-tab="views">Views</button>
+    <button type="button" class="app-admintab app-admintab--active" data-tab="views">Resource Collections</button>
     <button type="button" class="app-admintab" data-tab="reports">Resources</button>
     <button type="button" class="app-admintab" data-tab="config">System Config</button>
     <button type="button" class="app-admintab" data-tab="changes">Change log</button>
@@ -41,10 +41,11 @@
 
   {# =============================================================== Views #}
   <section class="app-admin__panel" data-panel="views">
-    <h2 class="font-heading-lg">Views</h2>
+    <h2 class="font-heading-lg">Resource collections</h2>
     <p class="font-body-sm text-base measure-5">
-      A <strong>view</strong> is a set of resource tabs. Its <strong>key</strong> is the Databricks group that
-      grants access; its <strong>title</strong> shows in the view switcher. The download group is derived as
+      A <strong>resource collection</strong> is a set of resources. Its <strong>collection key</strong> is the Databricks group that
+      grants access; its <strong>title</strong> shows in the collection switcher. Share <code>/collection/&lt;key&gt;</code>
+      to link directly to it. The download group is derived as
       <code>&lt;key&gt;{{ dl_suffix }}</code> unless a resource overrides it.
     </p>
 
@@ -69,7 +70,7 @@
                 {# Delete is a self-contained POST (works without admin.js): native
                    confirm guards the destructive action. Route redirects to /admin. #}
                 <form method="post" action="/admin/view/delete" class="app-inline-form"
-                      onsubmit="return confirm('Delete view {{ v.view_key }}? This removes it from the registry and cannot be undone.');">
+                      onsubmit="return confirm('Delete resource collection {{ v.view_key }}? This removes it from the registry and cannot be undone.');">
                   <input type="hidden" name="view_key" value="{{ v.view_key }}">
                   <button type="submit" class="usa-button usa-button--secondary usa-button--small">Delete</button>
                 </form>
@@ -77,23 +78,23 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5">No views defined yet.</td></tr>
+          <tr><td colspan="5">No resource collections defined yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
 
-    <h3 class="font-heading-sm margin-top-3">Add / edit a view</h3>
+    <h3 class="font-heading-sm margin-top-3">Add / edit a resource collection</h3>
     <form class="usa-form" id="view-form" data-role="view-form">
       <div class="app-formgrid">
         <div class="app-field">
-          <label class="usa-label" for="view-key">View key (Databricks group)</label>
+          <label class="usa-label" for="view-key">Collection key (Databricks group)</label>
           <input class="usa-input" id="view-key" name="view_key" required
                  pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
           <span class="usa-hint">Bare identifier — letters/digits/underscore, no leading digit.</span>
         </div>
         <div class="app-field">
-          <label class="usa-label" for="view-title">Title (shown in switcher)</label>
+          <label class="usa-label" for="view-title">Title (shown in collection switcher)</label>
           <input class="usa-input" id="view-title" name="title" required autocomplete="off">
         </div>
         <div class="app-field app-field--narrow">
@@ -106,7 +107,7 @@
         <label class="usa-checkbox__label" for="view-enabled">Enabled</label>
       </div>
       <div class="app-formactions">
-        <button class="usa-button" type="submit">Save view</button>
+        <button class="usa-button" type="submit">Save collection</button>
         <button type="button" class="usa-button usa-button--outline" data-role="view-reset">Clear</button>
         <span class="app-admin__status" data-role="view-status" role="status"></span>
       </div>
@@ -120,7 +121,7 @@
     <div class="app-tablewrap">
       <table class="usa-table usa-table--striped usa-table--borderless width-full">
         <thead>
-          <tr><th scope="col">Resource</th><th scope="col">Type</th><th scope="col">View</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
+          <tr><th scope="col">Resource</th><th scope="col">Type</th><th scope="col">Collection</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {% for r in reports %}
@@ -172,7 +173,7 @@
           <input class="usa-input" id="r-title" name="title" required autocomplete="off">
         </div>
         <div class="app-field app-field--narrow">
-          <label class="usa-label" for="r-view">View</label>
+          <label class="usa-label" for="r-view">Resource collection</label>
           <select class="usa-select" id="r-view" name="view_key" required>
             <option value="">— choose —</option>
             {% for v in views %}
@@ -245,7 +246,7 @@
         <input class="usa-input" id="r-download-group" name="download_group"
                data-role="download-group" autocomplete="off"
                pattern="[A-Za-z_][A-Za-z0-9_]*">
-        <span class="usa-hint" data-role="download-hint">Leave blank to derive from the view key.</span>
+        <span class="usa-hint" data-role="download-hint">Leave blank to derive from the collection key.</span>
       </div>
       <div class="usa-checkbox">
         <input class="usa-checkbox__input" id="r-enabled" name="enabled" type="checkbox" value="true" checked>
@@ -298,7 +299,7 @@
   {# ============================================================= Change log #}
   <section class="app-admin__panel" data-panel="changes" hidden>
     <h2 class="font-heading-lg">Change log</h2>
-    <p class="font-body-sm text-base">Admin mutations (resources, views, config) over the last 30 days.</p>
+    <p class="font-body-sm text-base">Admin mutations (resources, resource collections, config) over the last 30 days.</p>
 
     {# Analytics summary #}
     {% if config_audit_analytics %}

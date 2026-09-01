@@ -31,7 +31,7 @@
     );
   });
 
-  // ---- View switcher: navigate to the selected view's first report ---------
+  // ---- Resource collection switcher: navigate through its stable URL -------
   var viewSwitcher = document.querySelector('[data-role="view-switcher"]');
   if (viewSwitcher)
     viewSwitcher.addEventListener("change", function () {
@@ -501,7 +501,7 @@
           sqlText.value = (d && d.sql) || "(no SQL available)";
         })
         .catch(function () {
-          sqlText.value = "Could not load the SQL for this view.";
+          sqlText.value = "Could not load the SQL for these results.";
         });
     }
   }

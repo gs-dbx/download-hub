@@ -3,10 +3,9 @@
 
   Included by report.html for ANY report when can_download is true. POST /download
   re-checks the report's effective download group + the kill switch server-side.
-  The hidden report_id/date/search + one hidden input per report.filters mirror
+  The hidden report_id/search + one hidden input per report.filters mirror
   the live controls (kept in sync by app.js) so the export matches the on-screen
-  view. Form field name `date` is consistent across the hidden input, app.js, and
-  the route form read.
+  view.
 #}
 <div class="usa-modal usa-modal--lg" id="download-modal"
      aria-labelledby="download-modal-heading"
@@ -16,7 +15,6 @@
       <h2 class="usa-modal__heading" id="download-modal-heading">Download this view</h2>
       <form class="usa-form usa-form--large" id="download-form" method="post" action="/download">
         <input type="hidden" name="report_id" id="download-report-id" value="{{ report.report_id }}">
-        <input type="hidden" name="date" id="download-date" value="{{ selected_date }}">
         <input type="hidden" name="search" id="download-search" value="">
         {% for f in report.filters %}
         <input type="hidden" name="{{ f.field }}" data-field="{{ f.field }}"

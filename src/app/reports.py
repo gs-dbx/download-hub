@@ -6,21 +6,20 @@ fastapi/databricks/pyspark import) so it is importable in the pytest-only dev
 ``report_config`` registry.
 
 QUERY MODEL: a report is defined by a full SELECT (``source_query``), not a bare
-table. The app wraps that query as a subquery and layers on the optional
-date scope, filter equality, and ORDER BY:
+table. The app wraps that query as a subquery and layers configured filter
+equality and ORDER BY:
 
     SELECT <cols> FROM ( <source_query> ) AS _q
-    [WHERE <date_field> = :report_date]
-    [AND <filter> = :flt_<filter> ...]
+    [WHERE <filter> = :flt_<filter> ...]
     [ORDER BY <order_by>]
 
 Displayed columns DEFAULT to every column the query returns; they are narrowed
 only when ``columns_json`` is configured (then only the configured columns show,
-in configured order, with configured labels/formats). ``date_field`` and
-``filters_json`` are both optional — absent ``date_field`` means no date scope
-(all rows/dates show); absent ``filters_json`` means no filter dropdowns.
+in configured order, with configured labels/formats). ``filters_json`` is
+optional; absent filters mean the report has no filter dropdowns. The legacy
+``date_field`` registry value is migrated into an ordinary filter while parsing.
 
-Injection rule: VALUES (the selected ``report_date`` and filter selections) are
+Injection rule: selected filter VALUES are
 ONLY ever bound as ``:named`` params via ``{"name","value","type"}`` dicts
 (mirrors ``audit.py``) — never interpolated. IDENTIFIERS (column names, filter
 fields, ``order_by``) come from admin-authored config and cannot be bound, so
@@ -47,6 +46,18 @@ from dataclasses import dataclass
 # "float" is a numeric decimal format (right-aligned, decimals); "double" is
 # accepted as an alias and normalized to "float".
 VALID_FORMATS: frozenset[str] = frozenset({"int", "pct", "text", "float"})
+
+
+def infer_display_format(sql_type: str | None) -> str:
+    """Suggest a conservative display format from a Databricks SQL type."""
+    normalized = str(sql_type or "").strip().upper()
+    if normalized in {"BYTE", "SHORT", "INT", "INTEGER", "LONG", "BIGINT"}:
+        return "int"
+    if normalized in {"FLOAT", "DOUBLE", "DECIMAL", "NUMERIC", "REAL"}:
+        return "float"
+    if normalized.startswith("DECIMAL(") or normalized.startswith("NUMERIC("):
+        return "float"
+    return "text"
 
 # Numeric display formats — sorted by parsed value (not lexically) in the UI.
 NUMERIC_FORMATS: frozenset[str] = frozenset({"int", "pct", "float"})
@@ -188,8 +199,8 @@ class ReportConfig:
         source_query: The full SELECT a ``"query"`` report reads. Wrapped as a
             subquery by the query builders; validated as a single statement.
             Empty for a ``"volume"`` report.
-        date_field: Optional date column to scope by (``None`` = no date scope,
-            so all rows/dates show). Must exist in the query result when set.
+        date_field: Deprecated compatibility attribute; parsed configs always
+            expose ``None`` because legacy values become ordinary filters.
         columns: Configured display columns. EMPTY means "show every column the
             query returns" (defaults resolved at read time by
             :func:`resolve_columns`).
@@ -329,7 +340,7 @@ def parse_report_config(row: dict) -> ReportConfig:
     time.
 
     A ``"volume"`` report (``kind == "volume"``) needs a valid ``volume_root``
-    but no ``source_query`` / ``date_field`` / ``columns_json`` / ``filters_json``
+    but no ``source_query`` / ``columns_json`` / ``filters_json``
     (all optional); a ``"query"`` report needs a non-empty ``source_query``. A
     missing/blank ``kind`` parses as ``"query"`` so pre-existing rows are
     unchanged.
@@ -337,8 +348,8 @@ def parse_report_config(row: dict) -> ReportConfig:
     Args:
         row: A row dict with keys ``report_id``, ``title``, ``display_order``,
             ``enabled``; ``kind`` (optional, default ``"query"``); for a query
-            report ``source_query`` (required) plus ``date_field`` /
-            ``columns_json`` / ``filters_json`` / ``order_by`` (optional); for a
+            report ``source_query`` (required) plus ``columns_json`` /
+            ``filters_json`` / ``order_by`` (optional); for a
             volume report ``volume_root`` (required); and ``download_group`` /
             ``view_key`` / ``updated_by`` (optional, both kinds).
 
@@ -359,10 +370,23 @@ def parse_report_config(row: dict) -> ReportConfig:
         ) from exc
 
     columns = [_parse_column_spec(c) for c in raw_cols]
-    filters = [FilterSpec(field=f["field"], label=f["label"]) for f in raw_filters]
-    date_field = (row.get("date_field") or "").strip() or None
-
     kind = normalize_kind(row.get("kind"))
+    filters = [FilterSpec(field=f["field"], label=f["label"]) for f in raw_filters]
+    legacy_date_field = (row.get("date_field") or "").strip()
+    # Transparently migrate old registry rows: the retired date_field becomes a
+    # normal selected filter until the row is next saved with date_field=NULL.
+    if (
+        kind == "query"
+        and legacy_date_field
+        and all(f.field != legacy_date_field for f in filters)
+    ):
+        filters.insert(
+            0,
+            FilterSpec(
+                field=legacy_date_field,
+                label=legacy_date_field.replace("_", " ").title(),
+            ),
+        )
     source_query = row.get("source_query") or ""
     volume_root = (row.get("volume_root") or "").strip()
     if kind == "volume":
@@ -376,7 +400,7 @@ def parse_report_config(row: dict) -> ReportConfig:
         report_id=row["report_id"],
         title=row["title"],
         source_query=source_query,
-        date_field=date_field,
+        date_field=None,
         columns=columns,
         filters=filters,
         order_by=row.get("order_by"),

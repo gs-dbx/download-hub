@@ -25,7 +25,7 @@ env:
   - name: APP_LOGO
     value: "/static/img/logo.svg"
   - name: APP_VERSION
-    value: "0.4.0"
+    value: "0.5.0"
   # Global download kill switch: false/0/no/off disables downloads everywhere.
   - name: DOWNLOADS_ENABLED
     value: "true"

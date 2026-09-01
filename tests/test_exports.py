@@ -122,6 +122,10 @@ def test_filename_for_unknown_format_defaults_csv():
     assert filename_for("daily_metrics", "2026-01-12 00:00:00", "pdf").endswith(".csv")
 
 
+def test_filename_without_special_report_date_has_no_dangling_underscore():
+    assert filename_for("daily_metrics", "", "csv") == "daily_metrics.csv"
+
+
 # --- sanitize_filename (Content-Disposition safety) ----------------------
 
 

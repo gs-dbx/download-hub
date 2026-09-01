@@ -113,15 +113,16 @@ Apply Unity Catalog grants from `resources/grants.sql` to each group and the app
 
 ### 4. Add your own report
 
-Use the `/admin` console (recommended — query builder with OBO preview), or insert a row into `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`); columns/filters/date are optional:
+Use the `/admin` console (recommended — query builder with OBO preview), or insert a row into `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`); columns and filters are optional:
 
 ```sql
 INSERT INTO main.default.report_config VALUES (
   'my_report', 'My Report',
   'SELECT report_date, col1, col2 FROM main.default.my_table',  -- source_query (full SELECT)
-  'report_date',                                                 -- date_field (optional)
+  NULL,                                                          -- legacy date_field (unused)
   '[{"name":"col2","label":"Count","format":"int"}]',            -- columns_json (optional; empty = all cols)
-  '[{"name":"col1","label":"Column 1"}]',                        -- filters_json (optional)
+  '[{"field":"report_date","label":"Report date"},
+    {"field":"col1","label":"Column 1"}]',                       -- filters_json (optional)
   NULL, 1, true,                                                 -- order_by, display_order, enabled
   NULL, 'my_view', 'query', '',                                  -- download_group, view_key, kind, volume_root
   current_timestamp(), 'admin@org'

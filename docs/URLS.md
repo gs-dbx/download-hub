@@ -16,14 +16,13 @@ route is explicitly described as a health endpoint.
 A report URL can preserve the current view in its query string:
 
 ```text
-https://<app-host>/report/daily_metrics?date=2026-08-31&q=revenue&page=2&size=50&sort=amount&dir=desc&region=west
+https://<app-host>/report/daily_metrics?report_date=2026-08-31&q=revenue&page=2&size=50&sort=amount&dir=desc&region=west
 ```
 
 Supported report parameters are:
 
 | Parameter | Meaning |
 |---|---|
-| `date` | Selected report date; blank means all dates. |
 | `q` | Case-insensitive search text. |
 | `page` | One-based page number. |
 | `size` | `25`, `50`, `100`, or `all` (internally capped). |
@@ -73,9 +72,8 @@ Filter behavior:
   identifier and must be present in the report query output.
 - Unknown query-string keys are ignored. A caller cannot introduce an arbitrary
   filter column by adding a new parameter; only fields in `filters_json` apply.
-- The filter dropdown obtains its choices from the distinct, non-null values of
-  the configured field. For a date-scoped view, those choices are scoped to the
-  selected date.
+- Each filter dropdown obtains its choices independently from the distinct,
+  non-null values of its configured field.
 - Changing filters resets the browser UI to page 1. API-like callers should also
   set `page=1` when changing a filter to avoid requesting a now-empty later page.
 
@@ -84,7 +82,7 @@ rather than a query string. For example:
 
 ```text
 report_id=sales
-date=2026-08-31
+report_date=2026-08-31
 search=revenue
 region=west
 business_unit=consumer
@@ -116,8 +114,8 @@ path:
 {
   "spilled": true,
   "rows": 250000,
-  "filename": "daily_metrics_2026-08-31.csv",
-  "retrieve_path": "owner-hash/audit-id/daily_metrics_2026-08-31.csv"
+  "filename": "daily_metrics.csv",
+  "retrieve_path": "owner-hash/audit-id/daily_metrics.csv"
 }
 ```
 

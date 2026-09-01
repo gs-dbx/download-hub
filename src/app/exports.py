@@ -61,7 +61,8 @@ def filename_for(report_id: str, date: str, fmt: str) -> str:
     """
     date_part = (date or "").strip().split(" ")[0]
     ext = "xlsx" if fmt == "xlsx" else "csv"
-    return f"{report_id}_{date_part}.{ext}"
+    suffix = f"_{date_part}" if date_part else ""
+    return f"{report_id}{suffix}.{ext}"
 
 
 # Characters that would break or inject a quoted Content-Disposition filename:

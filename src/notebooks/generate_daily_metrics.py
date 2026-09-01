@@ -369,7 +369,7 @@ spark.sql(
 )
 
 # Report #1 config. Keep this shape aligned with app.reports.parse_report_config:
-# a full SELECT (source_query) + 4 display columns + 1 channel filter. Columns
+# a full SELECT (source_query) + 4 display columns + configured filters. Columns
 # could be omitted to show every column the query returns; they are configured
 # here to fix labels/formats.
 columns_json = json.dumps(
@@ -380,7 +380,12 @@ columns_json = json.dumps(
         {"name": "pct_change", "label": "% Change", "format": "pct"},
     ]
 )
-filters_json = json.dumps([{"field": "channel", "label": "CHANNEL"}])
+filters_json = json.dumps(
+    [
+        {"field": "report_date", "label": "Report date"},
+        {"field": "channel", "label": "Channel"},
+    ]
+)
 
 seed_schema = StructType(
     [
@@ -405,7 +410,7 @@ seed_rows = [
         "report_id": "daily_metrics",
         "title": "Daily Metrics Overview",
         "source_query": f"SELECT * FROM {schema_fqn}.daily_metrics",
-        "date_field": "report_date",
+        "date_field": None,  # retained schema column; dates are ordinary filters
         "columns_json": columns_json,
         "filters_json": filters_json,
         "order_by": "sort_order",
@@ -488,18 +493,16 @@ try:
 except Exception as _exc:  # noqa: BLE001 - demo seed is best-effort
     print(f"demo volume seed skipped ({type(_exc).__name__}: {_exc})")
 
-# Exports spill volume — over-cap query exports are written here (as the user,
-# OBO) and retrieved via the app. Set the app's APP_EXPORT_VOLUME env to this
-# path to enable the feature. Download-group members need WRITE + READ VOLUME.
+# Exports spill volume — over-cap query exports are written and read by the app
+# service principal. Set APP_EXPORT_VOLUME to this path and grant only the app SP
+# USE CATALOG, USE SCHEMA, READ VOLUME, and WRITE VOLUME (see resources/grants.sql).
 # Best-effort so a permission hiccup won't fail the seed.
 exports_vol_fqn = f"{schema_fqn}.exports"
 try:
     spark.sql(f"CREATE VOLUME IF NOT EXISTS {exports_vol_fqn}")
-    for _grp in (f"{default_view_key}_dl", default_view_key):
-        spark.sql(f"GRANT WRITE VOLUME ON VOLUME {exports_vol_fqn} TO `{_grp}`")
-        spark.sql(f"GRANT READ VOLUME ON VOLUME {exports_vol_fqn} TO `{_grp}`")
     print(
-        f"created exports volume {exports_vol_fqn} (+ WRITE/READ grants); set "
+        f"created private exports volume {exports_vol_fqn}; grant the app SP "
+        f"READ/WRITE VOLUME, then set "
         f"APP_EXPORT_VOLUME=/Volumes/{catalog}/{schema}/exports to enable over-cap spill"
     )
 except Exception as _exc:  # noqa: BLE001 - best-effort

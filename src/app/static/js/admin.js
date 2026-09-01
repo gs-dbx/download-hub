@@ -17,6 +17,12 @@
     return (ctx || document).querySelector('[data-role="' + role + '"]');
   }
 
+  function escapeHtml(value) {
+    var node = document.createElement("div");
+    node.textContent = value == null ? "" : String(value);
+    return node.innerHTML;
+  }
+
   // ---- Tabs: toggle the active button + show the matching panel ------------
   var tabs = document.querySelectorAll(".app-admintab");
   var panels = document.querySelectorAll("[data-panel]");
@@ -106,7 +112,6 @@
 
   var columnsWrap = byRole("columns-wrap");
   var columnsBody = byRole("columns-body");
-  var dateSel = byRole("date-field");
   var orderSel = byRole("order-by");
   var queryStatus = byRole("query-status");
   var dlGroupInput = byRole("download-group");
@@ -140,12 +145,12 @@
 
   // Build one picker row for a column, with optional preset state.
   // preset = {show:bool, label:str, format:str, filter:bool} or undefined.
-  function makeRow(colName, preset) {
+  function makeRow(colName, preset, inferredFormat, sqlType) {
     var tr = document.createElement("tr");
     tr.setAttribute("data-col", colName);
     var show = preset ? preset.show : false;
     var label = preset && preset.label != null ? preset.label : colName;
-    var fmt = (preset && preset.format) || "text";
+    var fmt = (preset && preset.format) || inferredFormat || "text";
     var isFilter = preset ? !!preset.filter : false;
     var agg = (preset && preset.agg) || "";
 
@@ -165,7 +170,9 @@
     tr.innerHTML =
       '<td><input type="checkbox" class="usa-checkbox__input--inline" data-cell="show"' +
       (show ? " checked" : "") + "></td>" +
-      "<td><code>" + colName + "</code></td>" +
+      "<td><code>" + escapeHtml(colName) + "</code>" +
+      (sqlType ? '<span class="usa-hint display-block">' + escapeHtml(sqlType) + "</span>" : "") +
+      "</td>" +
       '<td><input class="usa-input usa-input--inline" data-cell="label" value=""></td>' +
       '<td><select class="usa-select usa-select--inline" data-cell="format">' + fmtOpts + "</select></td>" +
       '<td><select class="usa-select usa-select--inline" data-cell="agg" ' +
@@ -181,23 +188,30 @@
   function renderPicker(columns, presetByName) {
     columnsBody.innerHTML = "";
     columns.forEach(function (c) {
-      columnsBody.appendChild(makeRow(c, presetByName ? presetByName[c] : undefined));
+      var meta = typeof c === "string" ? { name: c } : c;
+      var name = meta.name;
+      columnsBody.appendChild(
+        makeRow(
+          name,
+          presetByName ? presetByName[name] : undefined,
+          meta.format,
+          meta.type
+        )
+      );
     });
     columnsWrap.hidden = columns.length === 0;
 
-    // Populate date_field / order_by selects (keep any current value).
-    [dateSel, orderSel].forEach(function (sel) {
+    // Populate the order-by select while preserving its current value.
+    [orderSel].forEach(function (sel) {
       if (!sel) return;
       var current = sel.value;
-      sel.innerHTML =
-        sel === dateSel
-          ? '<option value="">— none (show all rows) —</option>'
-          : '<option value="">— none —</option>';
+      sel.innerHTML = '<option value="">— none —</option>';
       columns.forEach(function (c) {
+        var name = typeof c === "string" ? c : c.name;
         var o = document.createElement("option");
-        o.value = c;
-        o.textContent = c;
-        if (c === current) o.selected = true;
+        o.value = name;
+        o.textContent = name;
+        if (name === current) o.selected = true;
         sel.appendChild(o);
       });
     });
@@ -221,7 +235,7 @@
           queryStatus.className = "app-admin__status app-admin__status--err";
           return;
         }
-        renderPicker(data.columns || [], null);
+        renderPicker(data.column_metadata || data.columns || [], null);
         queryStatus.textContent =
           (data.columns || []).length + " columns, " + (data.rows || []).length + " sample rows.";
         queryStatus.className = "app-admin__status app-admin__status--ok";
@@ -304,8 +318,7 @@
       /* ignore malformed stored JSON */
     }
     renderPicker(cols, presetByName);
-    // Restore date_field / order_by after the picker rebuilt the selects.
-    if (dateSel) dateSel.value = btn.getAttribute("data-date-field") || "";
+    // Restore order_by after the picker rebuilt the select.
     if (orderSel) orderSel.value = btn.getAttribute("data-order-by") || "";
     queryStatus.textContent = "Loaded from saved config — Run query to refresh columns.";
     queryStatus.className = "app-admin__status";

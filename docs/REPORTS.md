@@ -22,9 +22,9 @@ A report is one of two **kinds** (the `kind` column; default `query`):
 | `report_id` | STRING | Stable registry key (a bare identifier, e.g. `daily_metrics`). The MERGE key. |
 | `title` | STRING | Human-facing tab/report title. Recorded in the audit row. |
 | `kind` | STRING | `query` (default) or `volume`. |
-| `source_query` | STRING | **Query reports:** a full single-statement `SELECT` the app wraps as `FROM ( … ) AS _q` and layers date scope / filters / ORDER BY on. `NULL` for volume reports. |
+| `source_query` | STRING | **Query reports:** a full single-statement `SELECT` the app wraps as `FROM ( … ) AS _q` and layers filters / ORDER BY on. `NULL` for volume reports. |
 | `volume_root` | STRING | **Volume reports:** the pinned root path (`/Volumes/<catalog>/<schema>/<volume>[/subpath]`); users browse it and its subfolders, jailed to the root. `NULL` for query reports. |
-| `date_field` | STRING | Optional date/timestamp column, treated as a filter: it drives a date dropdown (with an "All dates" option) and is bound into the SQL `WHERE`. |
+| `date_field` | STRING | Legacy compatibility column. Leave NULL; configure date columns in `filters_json`. |
 | `columns_json` | STRING | JSON array of display columns (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of filter dropdowns (may be empty/omitted). |
 | `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). |
@@ -92,7 +92,8 @@ The selected value is bound into the SQL `WHERE`.
 ## Configuring a volume report
 
 Set `kind = 'volume'` and `volume_root` to a single pinned UC Volume path; leave
-`source_query`, `date_field`, `columns_json`, and `filters_json` NULL/empty:
+`source_query`, `columns_json`, and `filters_json` NULL/empty (`date_field` is a
+legacy column and remains NULL):
 
 ```sql
 MERGE INTO <catalog>.<schema>.report_config t
@@ -148,7 +149,7 @@ Download is generic: any report gets a group-gated download that exports the **c
 
 ## Injection safety
 
-- **VALUES** (the selected date and filter selections) are ALWAYS bound as
+- **VALUES** (the selected filter values, including dates) are ALWAYS bound as
   `:named` Statement Execution parameters — never interpolated into SQL.
 - **IDENTIFIERS** (column names, filter fields, `order_by`, each dotted part of
   `source_fqn`) come from admin-authored config and cannot be bound, so each is

@@ -3,7 +3,7 @@
 //
 // Reads the active report id + control refs from stable data hooks and wires
 // every control back through the fragment endpoint /report/{id}/table:
-//   - search (debounced 250ms), report-date, per-filter selects, row-count size,
+//   - search (debounced 250ms), per-filter selects, row-count size,
 //     refresh, and pager — all server-side over the per-user snapshot cache.
 //   - the response's X-Total-Rows / X-Total-Pages / X-Page / X-Fetched-At headers
 //     redraw the pager + "Last updated" label without polluting the row markup.
@@ -106,7 +106,6 @@
   }
 
   var searchEl = byRole("report-search");
-  var dateEl = byRole("report-date");
   var sizeEl = byRole("report-size");
   var refreshEl = byRole("report-refresh");
   var tbody = byRole("report-tbody");
@@ -117,7 +116,6 @@
   var filterEls = container.querySelectorAll('[data-role="report-filter"]');
 
   // Download panel hidden inputs (present only for download-group members).
-  var dlDate = document.getElementById("download-date");
   var dlSearch = document.getElementById("download-search");
 
   var currentPage = 1;
@@ -159,7 +157,6 @@
   // absent for non-members, so each assignment is skipped. Loops every live
   // filter and copies its value into the matching hidden input by data-field.
   function syncDownloadFields() {
-    if (dlDate && dateEl) dlDate.value = dateEl.value;
     if (dlSearch && searchEl) dlSearch.value = searchEl.value;
     filterEls.forEach(function (sel) {
       var field = sel.getAttribute("data-field");
@@ -171,7 +168,6 @@
 
   function buildQuery(extra) {
     var params = new URLSearchParams();
-    if (dateEl) params.set("date", dateEl.value);
     filterEls.forEach(function (sel) {
       var field = sel.getAttribute("data-field");
       if (field) params.set(field, sel.value);
@@ -264,7 +260,7 @@
         html =
           '<tr><td colspan="99">Could not load the data (HTTP ' +
           resp.status +
-          "). Try again, or narrow the date/filters.</td></tr>";
+          "). Try again, or narrow the filters.</td></tr>";
       }
       tbody.innerHTML = html; // swap the server-rendered fragment
       var totalRows = parseInt(resp.headers.get("X-Total-Rows") || "0", 10);
@@ -299,8 +295,7 @@
       searchTimer = setTimeout(resetAndFetch, 250);
     });
 
-  // Date / filter / size changes reset to page 1 and re-fetch.
-  if (dateEl) dateEl.addEventListener("change", resetAndFetch);
+  // Filter / size changes reset to page 1 and re-fetch.
   filterEls.forEach(function (sel) {
     sel.addEventListener("change", resetAndFetch);
   });
@@ -524,8 +519,7 @@
   });
 
   // ---- Deep-link init: hydrate controls + sort from the URL on first load ---
-  // The server already applied ?date= to the initial render; here we restore
-  // search/filters/size/sort/page so a shared or reloaded URL shows that exact
+  // Restore search/filters/size/sort/page so a shared or reloaded URL shows that exact
   // view. We also pass the URL params straight through on the first fetch so the
   // DATA is correct even when a filter's option isn't in the default snapshot.
   (function initFromUrl() {
@@ -535,7 +529,6 @@
     p.forEach(function (v, k) {
       extra[k] = v;
     });
-    if (dateEl && p.has("date")) dateEl.value = p.get("date");
     if (searchEl && p.has("q")) {
       searchEl.value = p.get("q");
       if (p.get("q")) hasState = true;

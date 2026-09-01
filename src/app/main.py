@@ -9,7 +9,7 @@ PRINCIPAL and TTL-cached in-process (LOCKED DECISION L5). Because the SDK is
 fully synchronous, every SDK call inside an ``async def`` route is wrapped in
 ``asyncio.to_thread`` so it never blocks the event loop.
 
-The interactive display path uses SERVER-SIDE SQL PAGING: date scope, filters,
+The interactive display path uses SERVER-SIDE SQL PAGING: configured filters,
 search, sort, and pagination are all pushed into the SQL (a ``COUNT(*)`` for the
 total + one ``LIMIT/OFFSET`` page per request), run AS THE USER, so a large report
 never materializes in the app. Direct downloads are conservatively capped;
@@ -111,13 +111,12 @@ from reports import (
     build_report_view_query,
     build_report_view_upsert,
     decide_action,
+    infer_display_format,
     parse_report_config,
     parse_report_view,
     resolve_columns,
     split_columns,
 )
-from reports import build_report_dates_query as build_report_dates_query_generic
-from shaping import format_report_date
 from volumes import (
     breadcrumbs as _vol_breadcrumbs,
     download_file as _vol_download_file,
@@ -321,7 +320,12 @@ async def _exec(
     client: WorkspaceClient,
     sql: str,
     parameters: list[StatementParameterListItem] | None = None,
-) -> tuple[list[str], list[list]]:
+    *,
+    include_metadata: bool = False,
+) -> (
+    tuple[list[str], list[list]]
+    | tuple[list[str], list[list], list[dict[str, str]]]
+):
     """Execute a SQL statement on the bound warehouse and return (columns, rows).
 
     Shared body for the OBO and SP execution helpers. Wraps the synchronous
@@ -367,8 +371,22 @@ async def _exec(
         raise ReportDataError(friendly_error(detail))
 
     columns: list[str] = []
+    column_metadata: list[dict[str, str]] = []
     if resp.manifest is not None and resp.manifest.schema is not None:
-        columns = [c.name for c in (resp.manifest.schema.columns or [])]
+        for column in resp.manifest.schema.columns or []:
+            name = column.name or ""
+            raw_type = getattr(column, "type_text", None) or getattr(
+                column, "type_name", None
+            )
+            sql_type = getattr(raw_type, "value", raw_type)
+            columns.append(name)
+            column_metadata.append(
+                {
+                    "name": name,
+                    "type": str(sql_type or "UNKNOWN"),
+                    "format": infer_display_format(str(sql_type or "")),
+                }
+            )
 
     # Collect ALL result chunks, not just the first. The inline result carries
     # only chunk 0 (~a few MB); larger results are paged. Without following
@@ -390,6 +408,8 @@ async def _exec(
             )
         except Exception as exc:  # noqa: BLE001 - normalize transport error
             raise ReportDataError(friendly_error(str(exc))) from exc
+    if include_metadata:
+        return columns, data, column_metadata
     return columns, data
 
 
@@ -888,7 +908,6 @@ async def _query_report_page(
     token: str,
     report: ReportConfig,
     *,
-    date: str,
     selected_filters: dict[str, str],
     search: str,
     sort_key: str,
@@ -928,14 +947,9 @@ async def _query_report_page(
     active_filters = {
         k: v for k, v in (selected_filters or {}).items() if k in known and v
     }
-    scope_field = report.date_field if (report.date_field and date) else None
-    scope_date = date if scope_field else None
-
     count_sql, cparams = build_report_count_query(
         report.source_query,
         columns=select_cols,
-        date_field=scope_field,
-        report_date=scope_date,
         filters=active_filters or None,
         aggregates=aggregates,
         search=search or None,
@@ -946,7 +960,7 @@ async def _query_report_page(
 
     limit, _tp = _total_pages(total_rows, size)
     rows = await _query_report_rows(
-        token, report, columns=columns, date=date,
+        token, report, columns=columns,
         selected_filters=selected_filters, search=search, sort_key=sort_key,
         sort_dir=sort_dir, limit=limit, offset=max(0, (page - 1) * limit),
     )
@@ -958,7 +972,6 @@ async def _query_report_rows(
     report: ReportConfig,
     *,
     columns: list[ColumnSpec],
-    date: str,
     selected_filters: dict[str, str],
     search: str,
     sort_key: str,
@@ -980,13 +993,9 @@ async def _query_report_rows(
     active_filters = {
         k: v for k, v in (selected_filters or {}).items() if k in known and v
     }
-    scope_field = report.date_field if (report.date_field and date) else None
-    scope_date = date if scope_field else None
     page_sql, pparams = build_report_page_query(
         report.source_query,
         columns=select_cols,
-        date_field=scope_field,
-        report_date=scope_date,
         filters=active_filters or None,
         aggregates=aggregates,
         order_by=report.order_by,
@@ -1003,19 +1012,12 @@ async def _query_report_rows(
 
 
 async def _report_filter_options(
-    token: str, report: ReportConfig, date: str
+    token: str, report: ReportConfig
 ) -> dict[str, list[str]]:
-    """Distinct values for each filter dropdown (OBO), optionally date-scoped."""
+    """Return distinct values for each configured filter dropdown (OBO)."""
     options: dict[str, list[str]] = {}
-    scope_field = report.date_field if (report.date_field and date) else None
-    scope_date = date if scope_field else None
     for f in report.filters:
-        sql, params = build_distinct_values_query(
-            report.source_query,
-            f.field,
-            date_field=scope_field,
-            report_date=scope_date,
-        )
+        sql, params = build_distinct_values_query(report.source_query, f.field)
         _c, data = await _run_sql(token, sql, _to_sdk_params(params))
         options[f.field] = [str(r[0]) for r in data if r and r[0] is not None]
     return options
@@ -1360,29 +1362,9 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
             },
         )
 
-    # The date dropdown's options are the DISTINCT date values (date is now just
-    # a filter, #7); an unreadable source records an explicit notice.
+    # All query constraints come from the report's configured filters. There is
+    # no privileged/special report-date path.
     notice = ""
-    dates: list[str] = []
-    if report.date_field:
-        try:
-            _dcols, date_rows = await _run_sql(
-                token,
-                build_report_dates_query_generic(
-                    report.source_query, report.date_field
-                ),
-            )
-            dates = [format_report_date(r[0]) for r in date_rows]
-        except RuntimeError as exc:
-            notice = str(exc)
-
-    # ``""`` is the "All dates" sentinel (valid alongside the distinct dates).
-    q_date = request.query_params.get("date")
-    if q_date is not None and (q_date == "" or q_date in dates):
-        selected_date = q_date
-    else:
-        selected_date = dates[0] if dates else ""
-
     filter_options: dict[str, list[str]] = {f.field: [] for f in report.filters}
     selected_filters: dict[str, str] = {f.field: "" for f in report.filters}
     cells: list[list[dict]] = []
@@ -1397,11 +1379,10 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
     # No in-memory snapshot — a 1M-row source never materializes in the app.
     if not notice:
         try:
-            filter_options = await _report_filter_options(token, report, selected_date)
+            filter_options = await _report_filter_options(token, report)
             columns, page_rows, total_rows = await _query_report_page(
                 token,
                 report,
-                date=selected_date,
                 selected_filters={},
                 search="",
                 sort_key="",
@@ -1422,7 +1403,7 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
             )
             notice = (
                 "Something went wrong preparing this report. Try Refresh, or "
-                "narrow the date/filters."
+                "narrow the filters."
             )
 
     headers = header_cells(columns)
@@ -1436,8 +1417,6 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
             "nav_reports": nav_reports,
             "active_report_id": report.report_id,
             "report": report,
-            "dates": dates,
-            "selected_date": selected_date,
             "filter_options": filter_options,
             "selected_filters": selected_filters,
             "columns": headers,
@@ -1469,7 +1448,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
 
     Args:
         request: The incoming request (headers carry the OBO token/email; query
-            params carry ``date``, each filter ``field``, ``q``, ``page``,
+            params carry each filter ``field``, ``q``, ``page``,
             ``size``, and ``refresh``).
         report_id: The report registry key from the URL path.
 
@@ -1479,8 +1458,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
         ``error.html`` into a ``<tbody>``).
 
     Raises:
-        HTTPException: 404 if the report is absent/disabled; 400 if ``date`` is
-            out of the allowed set.
+        HTTPException: 404 if the report is absent/disabled.
     """
     try:
         configs = await _load_reports()
@@ -1524,9 +1502,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     # a generic message + a logged traceback so the real cause is diagnosable.
     try:
         # Server-side paging: filter/search/sort/paginate run in SQL as the user
-        # (no in-memory snapshot). The date is just a bound WHERE value now (#7);
-        # a stale/unknown date simply yields the empty state, never a 400/500.
-        date = request.query_params.get("date", "")
+        # (no in-memory snapshot).
         selected_filters: dict[str, str] = {}
         for f in report.filters:
             val = request.query_params.get(f.field)
@@ -1544,7 +1520,6 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
         columns, page_rows, total_rows = await _query_report_page(
             token,
             report,
-            date=date,
             selected_filters=selected_filters,
             search=q,
             sort_key=sort_key,
@@ -1566,7 +1541,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
         )
         return HTMLResponse(
             f'<tr><td colspan="{colspan}">Something went wrong loading this data. '
-            f"Try Refresh, or narrow the date/filters.</td></tr>"
+            f"Try Refresh, or narrow the filters.</td></tr>"
         )
 
     resp = templates.TemplateResponse(request, "_rows.html", {"rows": cells})
@@ -1581,10 +1556,10 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
 async def report_sql(request: Request, report_id: str) -> Response:
     """Return the effective SQL for the current view (query reports only).
 
-    Reflects the on-screen state: date scope + the active filters (as WHERE
-    clauses) + sort + aggregation, with bound values inlined for readability.
-    Note the app applies filters/search in-memory over the snapshot, so this is
-    the *representative* query for the view, not byte-for-byte what executed.
+    Reflects the on-screen state: active filters (as WHERE clauses) + sort and
+    aggregation, with bound values inlined for readability.
+    Search is applied by the paged outer query and is not included in this
+    representative configuration query.
     Gated by ``can_view`` so SQL isn't leaked to non-viewers.
 
     Raises:
@@ -1617,8 +1592,6 @@ async def report_sql(request: Request, report_id: str) -> Response:
         for f in report.filters
         if (v := request.query_params.get(f.field, "")).strip()
     }
-    date = request.query_params.get("date", "")
-    scope = bool(report.date_field and date)
     order_by = report.order_by
     if aggs and order_by:
         _outs = {a["output"] for a in aggs}
@@ -1628,8 +1601,6 @@ async def report_sql(request: Request, report_id: str) -> Response:
         sql, params = build_report_query(
             report.source_query,
             select_cols,
-            report.date_field if scope else None,
-            date if scope else None,
             filters=filters or None,
             order_by=order_by,
             aggregates=(aggs or None),
@@ -1653,7 +1624,7 @@ async def download(request: Request) -> Response:
     Flow (audit-first): validate the OBO token (401) -> kill switch (403) ->
     resolve the report (404) -> re-check membership of the report's effective
     download group (403; never trust the hidden UI; degrade-safe deny) ->
-    acknowledgement + justification (400) -> validate ``date`` (400) -> read the
+    acknowledgement + justification (400) -> read the
     full filtered/searched result AS THE USER via server-side SQL (filter/search
     pushed down), count it before retrieval -> build or incrementally stage the
     file for the report's
@@ -1662,7 +1633,7 @@ async def download(request: Request) -> Response:
 
     Args:
         request: The incoming request. Headers carry the OBO token + email; the
-            form carries ``report_id``, ``date``, ``search``, ``acknowledged``,
+            form carries ``report_id``, ``search``, ``acknowledged``,
             ``justification``, ``format``, and one field per report filter.
 
     Returns:
@@ -1671,7 +1642,7 @@ async def download(request: Request) -> Response:
     Raises:
         HTTPException: 401 (no OBO token), 403 (kill switch or not a member of
             the report's download group), 404 (unknown/disabled report), 400
-            (missing ack/justification or invalid date), 500 (audit write
+            (missing acknowledgement/justification), 500 (audit write
             failed — no file), 503 (source unreadable as the user).
     """
     # 1) OBO token + best-effort email for the audit row.
@@ -1733,33 +1704,7 @@ async def download(request: Request) -> Response:
             detail="Acknowledgement and a justification are both required.",
         )
 
-    # 5) Validate the requested date against the report's OBO date list — only
-    # for a date-scoped report; an undated report exports its full result.
-    date = str(form.get("date", ""))
-    if report.date_field:
-        try:
-            _dcols, date_rows = await _run_sql(
-                token,
-                build_report_dates_query_generic(
-                    report.source_query, report.date_field
-                ),
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        allowed = {format_report_date(r[0]) for r in date_rows}
-        # "" is the "All dates" sentinel (export every date); else a known date.
-        if date != "" and date not in allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "The selected report date is no longer available. Refresh the "
-                    "report, choose a listed date, and try again."
-                ),
-            )
-    else:
-        date = ""
-
-    # 6) Build the filter/search selection from the form; any absent filter
+    # 5) Build the filter/search selection from the form; any absent filter
     # defaults to "All" (no constraint) — SAME defaulting as report_table so the
     # export matches what's on screen.
     selected_filters: dict[str, str] = {}
@@ -1781,7 +1726,6 @@ async def download(request: Request) -> Response:
         columns, _sample, n = await _query_report_page(
             token,
             report,
-            date=date,
             selected_filters=selected_filters,
             search=search,
             sort_key="",
@@ -1802,8 +1746,7 @@ async def download(request: Request) -> Response:
             status_code=413,
             detail=(
                 f"This export has {n:,} rows, above the {direct_cap:,}-row Excel "
-                "limit. Choose CSV for large-result delivery, or narrow the date "
-                "and filters."
+                "limit. Choose CSV for large-result delivery, or narrow the filters."
             ),
         )
     if spill and not _EXPORT_VOLUME:
@@ -1812,7 +1755,7 @@ async def download(request: Request) -> Response:
             detail=(
                 f"This export has {n:,} rows, above the {direct_cap:,}-row direct "
                 f"download limit, and no export volume is configured. Narrow the "
-                "date or filters, or ask an administrator to configure "
+                "filters, or ask an administrator to configure "
                 "APP_EXPORT_VOLUME."
             ),
         )
@@ -1821,7 +1764,7 @@ async def download(request: Request) -> Response:
             status_code=413,
             detail=(
                 f"This export has {n:,} rows, above the {spill_cap:,}-row export "
-                "limit even for volume delivery. Narrow the date or filters."
+                "limit even for volume delivery. Narrow the filters."
             ),
         )
 
@@ -1833,7 +1776,7 @@ async def download(request: Request) -> Response:
     if not spill:
         try:
             searched = await _query_report_rows(
-                token, report, columns=columns, date=date,
+                token, report, columns=columns,
                 selected_filters=selected_filters, search=search, sort_key="",
                 sort_dir="asc", limit=max(1, n), offset=0,
             )
@@ -1849,7 +1792,7 @@ async def download(request: Request) -> Response:
         media_type = "text/csv"
     else:
         media_type = "text/csv"
-    fname = filename_for(report.report_id, date, fmt)
+    fname = filename_for(report.report_id, "", fmt)
 
     # 9) AUDIT-FIRST (NFR-5): build exactly one audit row as the app SP; the
     # INSERT must reach SUCCEEDED before the file/link is delivered (inline OR
@@ -1864,7 +1807,7 @@ async def download(request: Request) -> Response:
         summary = (summary + "; " if summary else "") + "delivery=volume"
     audit_row = build_audit_row(
         user_email=email,
-        report_date=date,
+        report_date="",
         filter_summary=summary,
         search_filter=search,
         row_count=n,
@@ -1895,7 +1838,7 @@ async def download(request: Request) -> Response:
         print(
             f"[download-hub] download audited: user={email!r} "
             f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
-            f"rows={n} format={fmt} date={date!r}"
+            f"rows={n} format={fmt}"
         )
         return Response(
             content=file_bytes or b"",
@@ -1924,7 +1867,7 @@ async def download(request: Request) -> Response:
                 offset = 0
                 while offset < n:
                     page_rows = await _query_report_rows(
-                        token, report, columns=columns, date=date,
+                        token, report, columns=columns,
                         selected_filters=selected_filters, search=search,
                         sort_key="", sort_dir="asc",
                         limit=min(_EXPORT_PAGE_ROWS, n - offset), offset=offset,
@@ -2380,7 +2323,6 @@ async def admin_page(request: Request) -> Response:
             "report_id": c.report_id,
             "title": c.title,
             "source_query": c.source_query,
-            "date_field": c.date_field or "",
             "order_by": c.order_by or "",
             "display_order": c.display_order,
             "enabled": c.enabled,
@@ -2432,7 +2374,8 @@ async def admin_preview(request: Request) -> Response:
             optional ``limit``).
 
     Returns:
-        A JSON ``{"columns": [...], "rows": [[...], ...]}`` payload, or
+        A JSON payload with ``columns``, typed ``column_metadata`` (including a
+        suggested display format), and sample ``rows``, or
         ``{"error": "..."}`` with a 400/503 status.
     """
     token, _email, _me_user = await _require_admin(request)
@@ -2447,12 +2390,16 @@ async def admin_preview(request: Request) -> Response:
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     try:
-        cols, data = await _run_sql(token, sql)
+        cols, data, column_metadata = await _exec(
+            _user_client(token), sql, include_metadata=True
+        )
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
     # Stringify sample cells for safe JSON transport (numbers come back as str).
     rows = [["" if v is None else str(v) for v in row] for row in data]
-    return JSONResponse({"columns": cols, "rows": rows})
+    return JSONResponse(
+        {"columns": cols, "column_metadata": column_metadata, "rows": rows}
+    )
 
 
 @app.post("/admin/report")
@@ -2461,7 +2408,7 @@ async def admin_save_report(request: Request) -> Response:
 
     Args:
         request: The incoming request; form carries the full report row
-            (``report_id``, ``title``, ``source_query``, ``date_field``,
+            (``report_id``, ``title``, ``source_query``,
             ``columns_json``, ``filters_json``, ``order_by``, ``display_order``,
             ``enabled``, ``download_group``, ``view_key``).
 
@@ -2477,7 +2424,9 @@ async def admin_save_report(request: Request) -> Response:
         "kind": str(form.get("kind", "query")).strip() or "query",
         "volume_root": str(form.get("volume_root", "")).strip(),
         "source_query": str(form.get("source_query", "")),
-        "date_field": str(form.get("date_field", "")).strip(),
+        # Retain the registry column for schema compatibility, but retire the
+        # special date behavior. Dates are ordinary configured filters.
+        "date_field": "",
         "columns_json": str(form.get("columns_json", "") or "[]"),
         "filters_json": str(form.get("filters_json", "") or "[]"),
         "order_by": str(form.get("order_by", "")).strip(),

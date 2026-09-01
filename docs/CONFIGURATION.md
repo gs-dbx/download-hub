@@ -99,7 +99,7 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `kind` | STRING | `query` (default) or `volume`. Selects the report type below. |
 | `source_query` | STRING | **Query reports:** a full single-statement `SELECT` (wrapped as `FROM ( … ) AS _q`). NULL for volume reports. (Replaces the retired `source_fqn`.) |
 | `volume_root` | STRING | **Volume reports:** pinned UC Volume root, e.g. `/Volumes/<catalog>/<schema>/<volume>`. NULL for query reports. |
-| `date_field` | STRING | Optional date/timestamp column (bare identifier). Treated as a filter: it drives a date dropdown (with an "All dates" option) and is bound into the SQL `WHERE`. |
+| `date_field` | STRING | Legacy compatibility column. Leave NULL; all constraints, including dates, belong in `filters_json`. |
 | `columns_json` | STRING | JSON array of column objects (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of `{"field", "label"}` objects (see below). May be empty `[]` or NULL. |
 | `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). |
@@ -109,7 +109,16 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `view_key` | STRING | Databricks group granting VIEW access (also names the report's view/tab). |
 | `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (admin console stamps the editor's email). |
 
+Existing registry rows with `date_field` populated are migrated in memory: the
+field appears as an ordinary configured filter, and the next admin save clears
+`date_field`. This avoids silently broadening older reports during rollout.
+
 ### `columns_json` format
+
+When an administrator runs a query in the report builder, the app reads the
+Databricks result-schema metadata and suggests `int` for integral columns,
+`float` for decimal/floating columns, and `text` for all other types. The SQL
+type appears below each column name and the suggested format remains editable.
 
 A JSON array of column descriptors:
 
@@ -253,7 +262,7 @@ VALUES (
   'monthly_budget',                                       -- report_id
   'Monthly Budget Execution',                            -- title
   'SELECT * FROM main.finance.budget_summary',           -- source_query (a full SELECT)
-  'month_end',                                           -- date_field (column the query returns)
+  NULL,                                                  -- legacy date_field (unused)
   '[
     {"name":"department","label":"Department","format":"text"},
     {"name":"budget_amt","label":"Budget","format":"int"},
@@ -261,6 +270,7 @@ VALUES (
     {"name":"pct_spent","label":"% Spent","format":"pct"}
   ]',                                                    -- columns_json
   '[
+    {"field":"month_end","label":"Month end"},
     {"field":"org_unit","label":"Org Unit"},
     {"field":"cost_center","label":"Cost Center"}
   ]',                                                    -- filters_json

@@ -38,7 +38,7 @@ The gate **never fails open**: any error resolving membership degrades to "not a
 
 ## Audit (audit-first)
 
-- On each allowed download the app writes **exactly one** row to `{APP_CATALOG}.{APP_SCHEMA}.download_audit` — capturing only what Databricks does not natively log, i.e. that a download occurred: `report_id`/`report_title`, user email, report_date, applied-filters summary (e.g., `region=ALL, quarter=Q3`), search filter, row count, export format (CSV/XLSX), justification, app version, and timestamp.
+- On each allowed download the app writes **exactly one** row to `{APP_CATALOG}.{APP_SCHEMA}.download_audit` — capturing only what Databricks does not natively log, i.e. that a download occurred: `report_id`/`report_title`, user email, applied-filters summary (including any date filter), search filter, row count, export format (CSV/XLSX), justification, app version, and timestamp. The legacy `report_date` audit column remains NULL for schema compatibility.
 - The audit INSERT runs **as the app service principal**, via the default `WorkspaceClient()` that auto-detects the runtime-injected SP credentials — not as the user.
 - **Audit-first:** the INSERT must reach `SUCCEEDED` *before* the file is returned. If it fails, the download is blocked (HTTP 500, no file). An app-log line is also emitted so the event surfaces in `databricks apps logs`.
 

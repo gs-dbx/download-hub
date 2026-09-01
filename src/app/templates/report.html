@@ -36,25 +36,12 @@
         <input class="usa-input" id="report-search" type="search"
                data-role="report-search" placeholder="Filter results" autocomplete="off">
       </div>
-      {# Report date is just another filter now (server-side WHERE). Shown only
-         when the report is date-scoped (dates present); an "All dates" option
-         (value "") gives it the same "All" affordance as the other filters. #}
-      {% if dates %}
-      <div class="app-field app-field--date">
-        <label class="usa-label" for="report-date">Report date</label>
-        <select class="usa-select" id="report-date" data-role="report-date">
-          <option value=""{% if selected_date == "" %} selected{% endif %}>All dates</option>
-          {% for rd in dates %}
-          <option value="{{ rd }}"{% if rd == selected_date %} selected{% endif %}>{{ rd }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      {% endif %}
       {% for f in report.filters %}
       <div class="app-field app-field--filter">
         <label class="usa-label" for="report-filter-{{ f.field }}">{{ f.label }}</label>
         <select class="usa-select" id="report-filter-{{ f.field }}"
                 data-role="report-filter" data-field="{{ f.field }}">
+          <option value=""{% if not selected_filters[f.field] %} selected{% endif %}>All</option>
           {% for opt in filter_options[f.field] %}
           <option value="{{ opt }}"{% if opt == selected_filters[f.field] %} selected{% endif %}>{{ opt }}</option>
           {% endfor %}
@@ -116,7 +103,7 @@
     </div>
     <table class="usa-table usa-table--striped usa-table--borderless width-full"
            data-role="report-table">
-      <caption class="usa-sr-only">{{ report.title }} for {{ selected_date }}</caption>
+      <caption class="usa-sr-only">{{ report.title }}</caption>
       <thead>
         <tr>
           {% for h in columns %}

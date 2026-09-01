@@ -99,8 +99,8 @@ def build_audit_insert(
         raise ValueError("catalog and schema are required and must be non-empty")
 
     fqn = f"{catalog}.{schema}.download_audit"
-    # report_date is bound as STRING and cast so the "All dates" export (empty
-    # date) stores NULL instead of failing to parse '' as a TIMESTAMP.
+    # report_date is a retired compatibility field. New exports bind an empty
+    # string so the existing audit schema stores NULL.
     sql = (
         f"INSERT INTO {fqn} "
         "(audit_id, event_ts, user_email, report_date, filter_summary, search_filter, "

@@ -33,15 +33,15 @@ Must pass: 323 passed, 1 skipped. All modules except `main.py` are testable with
 
 **Preferred:** use the `/admin` console (query builder → preview OBO → pick columns/filters → save). It writes the registry row for you as the app service principal.
 
-**Or** insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`), not a bare table; the app wraps it as `SELECT <cols> FROM ( <source_query> ) AS _q` and layers date scope / filters / ORDER BY. `columns_json`, `filters_json`, and `date_field` are all optional (empty `columns_json` = show every query column). The 15-column schema is `report_id, title, source_query, date_field, columns_json, filters_json, order_by, display_order, enabled, download_group, view_key, kind, volume_root, updated_at, updated_by`:
+**Or** insert a row in `{APP_CATALOG}.{APP_SCHEMA}.report_config` directly. A report is a full `SELECT` (`source_query`), not a bare table; the app wraps it as `SELECT <cols> FROM ( <source_query> ) AS _q` and layers configured filters / ORDER BY. `columns_json` and `filters_json` are optional (empty `columns_json` = show every query column). `date_field` is retained only for registry compatibility and should be NULL; date columns are ordinary `filters_json` entries. The 15-column schema is `report_id, title, source_query, date_field, columns_json, filters_json, order_by, display_order, enabled, download_group, view_key, kind, volume_root, updated_at, updated_by`:
 
 ```sql
 INSERT INTO main.default.report_config VALUES (
   'my_report', 'My Report',
   'SELECT report_date, region, amount FROM main.default.my_table',  -- source_query (full SELECT)
-  'report_date',                                                     -- date_field (optional)
+  NULL,                                                              -- legacy date_field (unused)
   '[{"name":"amount","label":"Amount","format":"int"}]',             -- columns_json (optional; empty = all cols)
-  '[{"name":"region","label":"Region"}]',                            -- filters_json (optional)
+  '[{"field":"report_date","label":"Report date"},{"field":"region","label":"Region"}]', -- filters_json
   NULL, 1, true,                                                     -- order_by, display_order, enabled
   NULL,                                                              -- download_group (NULL = derive <view_key>_dl)
   'my_view', 'query', '',                                            -- view_key, kind ('query'|'volume'), volume_root

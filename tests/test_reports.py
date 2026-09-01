@@ -35,6 +35,7 @@ from app.reports import (
     build_report_dates_query,
     build_report_query,
     decide_action,
+    infer_display_format,
     normalize_agg,
     normalize_format,
     split_columns,
@@ -50,6 +51,22 @@ from app.reports import (
     validate_query,
     validate_volume_root,
 )
+
+
+@pytest.mark.parametrize(
+    "sql_type,expected",
+    [
+        ("INT", "int"),
+        ("BIGINT", "int"),
+        ("DOUBLE", "float"),
+        ("DECIMAL(18,2)", "float"),
+        ("TIMESTAMP", "text"),
+        ("STRING", "text"),
+        (None, "text"),
+    ],
+)
+def test_infer_display_format(sql_type, expected):
+    assert infer_display_format(sql_type) == expected
 
 # A representative source query (a full SELECT the app wraps as a subquery).
 _SRC = "SELECT * FROM main.default.daily_metrics"
@@ -87,7 +104,7 @@ def test_parse_report_config_parses_seed_row():
     assert rc.report_id == "daily_metrics"
     assert rc.title == "Daily Metrics Overview"
     assert rc.source_query == _SRC
-    assert rc.date_field == "report_date"
+    assert rc.date_field is None
     assert rc.order_by == "sort_order"
     assert rc.display_order == 1
     assert rc.enabled is True
@@ -102,10 +119,12 @@ def test_parse_report_config_parses_seed_row():
     ]
     assert [c.label for c in rc.columns] == ["Metric", "2026", "2025", "% Change"]
     assert [c.format for c in rc.columns] == ["text", "int", "int", "pct"]
-    assert len(rc.filters) == 1
+    assert len(rc.filters) == 2
     assert isinstance(rc.filters[0], FilterSpec)
-    assert rc.filters[0].field == "channel"
-    assert rc.filters[0].label == "CHANNEL"
+    assert rc.filters[0].field == "report_date"
+    assert rc.filters[0].label == "Report Date"
+    assert rc.filters[1].field == "channel"
+    assert rc.filters[1].label == "CHANNEL"
 
 
 def test_parse_report_config_tolerates_unknown_format():

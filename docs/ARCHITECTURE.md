@@ -4,7 +4,7 @@
 
 A `report_config` row is one of two **kinds** (the `kind` column, default `query`):
 
-- **`query`** — reads a SQL `SELECT` (`source_query`) OBO with **server-side SQL paging**: the active date/filters/search/sort are pushed into SQL and each interaction runs a `COUNT(*)` (pager total) + one `LIMIT`/`OFFSET` page, so a large report never materializes in the app. Offers a gated CSV/XLSX download (the full filtered/searched set, bounded by the spill cap). Columns may be aggregated (`AGG(source)` + join-safe `GROUP BY`).
+- **`query`** — reads a SQL `SELECT` (`source_query`) OBO with **server-side SQL paging**: configured filters/search/sort are pushed into SQL and each interaction runs a `COUNT(*)` (pager total) + one `LIMIT`/`OFFSET` page, so a large report never materializes in the app. Offers a gated CSV/XLSX download. Columns may be aggregated (`AGG(source)` + join-safe `GROUP BY`).
 - **`volume`** — browses a pinned UC Volume root (`volume_root`) via the Files API OBO: folders-first listing, breadcrumb traversal (path-jailed to the root in `volumes.py`), and per-file gated download. Same acknowledgement + justification + audit-first write as query downloads. Routes: `GET /volume/{id}/list`, `POST /volume/{id}/download`.
 
 Both kinds share the group-based visibility/download gating and the audit table.
@@ -28,8 +28,8 @@ FastAPI route (main.py)
             └─ Sort by display_order
 
 Server-side SQL paging (per interaction, OBO)
-  ├─ COUNT(*) over ( source_query [+ date/filters] ) → pager total
-  ├─ One page: SELECT ... FROM ( source_query ) [WHERE date/filters + search]
+  ├─ COUNT(*) over ( source_query [+ configured filters] ) → pager total
+  ├─ One page: SELECT ... FROM ( source_query ) [WHERE filters + search]
   │            ORDER BY <sort> LIMIT <size> OFFSET <page*size>
   ├─ Values bound (date/filter/search); identifiers allowlist-validated; LIMIT/OFFSET clamped
   └─ Filter dropdowns: a distinct-values query per filter field
@@ -122,7 +122,6 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 **`shaping.py`** — Format helpers
 - `format_int()` — format as thousands-separated int
 - `format_pct()` — format as signed one-decimal percentage
-- `format_report_date()` — format timestamp as date string
 
 **`audit.py`** — Audit row builders
 - `build_audit_row()` — construct audit record dict (filter_summary, source_query, report_id/title)
@@ -148,7 +147,7 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 The interactive path does **not** cache result rows. Each interaction (load, filter,
 search, sort, page) runs, OBO:
 
-- a `COUNT(*)` over the report query (with the active date/filters/search) for the pager total, and
+- a `COUNT(*)` over the report query (with active filters/search) for the pager total, and
 - one page — `SELECT ... FROM ( source_query ) [WHERE …] ORDER BY <sort> LIMIT <size> OFFSET <page*size>`.
 
 `refresh=1` simply re-runs the query. Because only one page is ever fetched, a
@@ -210,13 +209,13 @@ The membership check is re-done server-side on every `POST /download` (defense i
 
 ### Values: always bound
 
-All user-provided values (date, filter selections, search text) are ALWAYS bound as `:named` parameters via the Statement Execution API.
+All user-provided filter selections and search text are ALWAYS bound as `:named` parameters via the Statement Execution API.
 
 Example:
 ```python
-sql = "SELECT ... WHERE report_date = :report_date AND channel = :flt_channel"
+sql = "SELECT ... WHERE report_date = :flt_report_date AND channel = :flt_channel"
 params = [
-    {"name": "report_date", "value": "2026-08-14", "type": "TIMESTAMP"},
+    {"name": "flt_report_date", "value": "2026-08-14", "type": "STRING"},
     {"name": "flt_channel", "value": "ALL", "type": "STRING"}
 ]
 client.statement_execution.execute_statement(statement=sql, parameters=params, ...)

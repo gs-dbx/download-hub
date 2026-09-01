@@ -136,7 +136,7 @@
                         data-role="report-edit"
                         data-report-id="{{ r.report_id }}" data-title="{{ r.title }}"
                         data-kind="{{ r.kind or 'query' }}" data-volume-root="{{ r.volume_root }}"
-                        data-source-query="{{ r.source_query }}" data-date-field="{{ r.date_field }}"
+                        data-source-query="{{ r.source_query }}"
                         data-order-by="{{ r.order_by }}" data-display-order="{{ r.display_order }}"
                         data-enabled="{{ 'true' if r.enabled else 'false' }}"
                         data-download-group="{{ r.download_group }}" data-view-key="{{ r.view_key }}"
@@ -216,7 +216,7 @@
       {# Column/filter picker — populated by admin.js after "Run query". #}
       <div class="app-field" data-role="columns-wrap" hidden>
         <label class="usa-label">Columns &amp; filters</label>
-        <span class="usa-hint">Check the columns to display. Leave all unchecked to show every column the query returns.</span>
+        <span class="usa-hint">Check the columns to display. Formats are suggested from query data types and can be overridden. Leave all unchecked to show every column the query returns.</span>
         <div class="app-tablewrap">
           <table class="usa-table usa-table--compact usa-table--borderless width-full" data-role="columns-table">
             <thead>
@@ -229,12 +229,6 @@
       </div>{# /query-section #}
 
       <div class="app-formgrid">
-        <div class="app-field">
-          <label class="usa-label" for="r-date-field">Date field (optional)</label>
-          <select class="usa-select" id="r-date-field" name="date_field" data-role="date-field">
-            <option value="">— none (show all rows) —</option>
-          </select>
-        </div>
         <div class="app-field">
           <label class="usa-label" for="r-order-by">Order by (optional)</label>
           <select class="usa-select" id="r-order-by" name="order_by" data-role="order-by">

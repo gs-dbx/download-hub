@@ -17,7 +17,7 @@ The **Data Download Hub** is a configurable, server-rendered FastAPI application
 2. Extract OBO token from `X-Forwarded-Access-Token` header
 3. For data reads: build a per-request `WorkspaceClient` with `auth_type="pat"` and read AS THE USER via Statement Execution API
 4. For registry reads: use a cached (TTL ~300s) service-principal client
-5. Server-side SQL paging: build a `COUNT(*)` + one `LIMIT`/`OFFSET` page with the active date/filters/search/sort pushed into SQL, run AS THE USER (`_query_report_page`); filter dropdown options come from a distinct-values query (`_report_filter_options`)
+5. Server-side SQL paging: build a `COUNT(*)` + one `LIMIT`/`OFFSET` page with configured filters/search/sort pushed into SQL, run AS THE USER (`_query_report_page`); filter dropdown options come from a distinct-values query (`_report_filter_options`)
 6. Render `report.html` full page or `_rows.html` fragment (JS-driven table updates)
 7. Download: re-check group membership (defense in depth), validate form, run the same filtered/searched query bounded by the spill cap, write audit row (as SP), return file
 
@@ -91,13 +91,10 @@ def apply_filters(rows: list[dict], selected_filters: dict[str, str]) -> list[di
 
 **Good** (from `reports.py`):
 ```python
-# Identifiers from config — validated via allowlist regex
-fqn = validate_fqn(source_fqn)  # raises ValueError if bad
-date_field = validate_identifier(date_field)
-
-# Values — always bound as :named params, never interpolated
-params.append({"name": "report_date", "value": report_date, "type": "TIMESTAMP"})
-sql += f" WHERE {date_field} = :report_date"  # identifier interpolated, value bound
+# Configured filter identifiers use the allowlist; selected values are bound.
+field = validate_identifier(filter_field)
+params.append({"name": "flt_region", "value": selected_value, "type": "STRING"})
+sql += f" WHERE {field} = :flt_region"
 ```
 
 ### Test without the SDK
@@ -124,9 +121,9 @@ INSERT INTO main.default.report_config VALUES (
   'new_report',                          -- report_id (stable key, bare identifier)
   'New Report Title',                    -- title (user-facing)
   'main.default.my_source_table',        -- source_fqn (1–3 dotted parts, each bare identifier)
-  'report_date',                         -- date_field (column to scope by)
+  NULL,                                  -- legacy date_field (unused)
   '[{"name":"col1","label":"Column 1","format":"text"},{"name":"col2","label":"Count","format":"int"}]',  -- columns_json
-  '[{"field":"region","label":"Region"}]',  -- filters_json (optional; may be empty)
+  '[{"field":"report_date","label":"Report date"},{"field":"region","label":"Region"}]',
   'col1',                                -- order_by (optional; NULL for no sort)
   2,                                     -- display_order
   true,                                  -- enabled
@@ -243,9 +240,9 @@ Current baseline: 323 passed, 1 skipped. Every code change must maintain or impr
 
 4. **Filter/search/sort must reference real output columns.** Filters bind into the SQL `WHERE`, search spans the displayed text columns, and sort orders by the clicked column — all identifiers are allowlist-validated. If a filter field isn't in the report's query output, the OBO read fails with "column not found".
 
-5. **Every identifier is validated; bad config raises ValueError at query-build time, not runtime.** A typo in `source_fqn`, `date_field`, column names, or filter fields is caught early by the regex validator, which is good — no silent NULL results.
+5. **Every identifier is validated; bad config raises ValueError at query-build time, not runtime.** A typo in column names or filter fields is caught early by the regex validator, which is good — no silent NULL results.
 
-6. **The identifier allowlist is strict: `^[A-Za-z_][A-Za-z0-9_]*$`.** No hyphens, no underscores at the start, no dots. Use this for `source_fqn` parts, `date_field`, column names, filter fields, and `order_by`.
+6. **The identifier allowlist is strict: `^[A-Za-z_][A-Za-z0-9_]*$`.** No hyphens or dots. Use this for column names, filter fields, and `order_by`.
 
 7. **Audit writes are synchronous blocks.** If an audit insert fails for ANY reason, the download is blocked (HTTP 500, no file). This is audit-first and non-negotiable.
 

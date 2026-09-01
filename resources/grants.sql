@@ -40,9 +40,9 @@ GRANT USE CATALOG ON CATALOG main TO `download_hub_app_users`;
 GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_app_users`;
 GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_app_users`;
 
-GRANT USE CATALOG ON CATALOG main TO `download_hub_app_users_dl`;
-GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_app_users_dl`;
-GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_app_users_dl`;
+GRANT USE CATALOG ON CATALOG main TO `download_hub_download_users`;
+GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_download_users`;
+GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_download_users`;
 
 -- Large CSV delivery (only when APP_EXPORT_VOLUME is configured). Keep the
 -- volume private: grant only the app SP, not end-user download groups.

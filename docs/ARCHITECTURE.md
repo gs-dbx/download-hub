@@ -199,7 +199,7 @@ Download is allowed only when BOTH conditions are true:
 1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty)
 2. **Group membership:** user is a member of the report's **effective download group**
    - If `report.download_group` is set (non-NULL, non-empty after strip), that's the effective group
-   - Otherwise, fall back to the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`)
+   - Otherwise, derive `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default suffix `_dl`)
 
 The membership check is re-done server-side on every `POST /download` (defense in depth). The UI panel is never trusted on its own.
 

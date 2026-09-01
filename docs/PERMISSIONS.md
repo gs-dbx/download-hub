@@ -32,7 +32,7 @@ Download is generic — it applies to **every** report and exports the current f
 2. **Group membership:** the user is a member of the report's **effective download group**, determined from `current_user.me()` group display names.
 
 `can_download = downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
-`effective_download_group(report)` is the report's `report_config.download_group` when set (stripped), else the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`) — so a report can be gated to its own Databricks group, otherwise it falls back to the single default. The **same** helper drives both button visibility and server enforcement.
+`effective_download_group(report)` is the report's `report_config.download_group` when set (stripped), otherwise `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default suffix `_dl`). The seeded report uses the bundle's explicit `download_users_group` value (`download_hub_download_users` by default). The **same** helper drives both button visibility and server enforcement.
 
 The gate **never fails open**: any error resolving membership degrades to "not allowed" (panel hidden, download denied). The hidden UI panel is never trusted — membership is always re-checked on the server before a file is produced.
 

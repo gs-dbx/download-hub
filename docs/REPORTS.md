@@ -144,7 +144,7 @@ table.
 Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** with the data-handling disclaimer at the top. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume.
 
 - Gating: `downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
-- `effective_download_group(report)` = the report's `download_group` when set (stripped), else the code default `auth.DOWNLOAD_GROUP` (`download_hub_download_users`). Set `download_group` to gate a specific report to a different Databricks group.
+- `effective_download_group(report)` = the report's `download_group` when set (stripped), otherwise `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default `_dl`). The seed supplies an explicit bundle-configured download group.
 - Each download writes exactly one audit row to `{APP_CATALOG}.{APP_SCHEMA}.download_audit` (audit-first) carrying `report_id`/`report_title` and an applied-filters summary. See [PERMISSIONS.md](PERMISSIONS.md).
 
 ## Injection safety

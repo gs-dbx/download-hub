@@ -48,6 +48,7 @@ resources/              Databricks Asset Bundle resources
 databricks.yml          Databricks Asset Bundle manifest (catalog, schema, warehouse, groups)
 tests/                  pytest unit tests (pure functions, no SDK required, 323 passed)
 docs/
+  ADMIN_SETUP.md        Complete Databricks administrator setup checklist
   ARCHITECTURE.md       Request flow, module map, caching, auth model
   CONFIGURATION.md      Environment variables, report_config schema, worked example
   DEPLOY.md             Bundle validate/deploy/run, groups, grants, kill switch
@@ -60,6 +61,11 @@ docs/
 ```
 
 ## Quick start
+
+Databricks administrators should begin with
+**[docs/ADMIN_SETUP.md](docs/ADMIN_SETUP.md)**. It covers every workspace,
+identity, warehouse, Unity Catalog, group, service-principal, and volume setting
+required before end users can use the app.
 
 ### 1. Run the tests
 
@@ -181,6 +187,7 @@ See `docs/REPORTS.md` and `docs/CONFIGURATION.md` for the `report_config` schema
 - **`docs/OFFLINE.md`** — air-gap packaging, vendored assets, wheelhouse refresh
 - **`docs/MIGRATION.md`** — deploying to another environment
 - **`docs/URLS.md`** — URL structure, route parameters, and endpoint behavior
+- **`docs/ADMIN_SETUP.md`** — comprehensive Databricks administrator setup
 - **`.github/copilot-instructions.md`** — GitHub Copilot guide (code boundaries, patterns, rules)
 
 ## Key decisions (locked)

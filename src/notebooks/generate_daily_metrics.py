@@ -20,9 +20,15 @@
 
 dbutils.widgets.text("catalog", "main", "Target catalog")
 dbutils.widgets.text("schema", "default", "Target schema")
+dbutils.widgets.text("view_group", "download_hub_app_users", "Report view group")
+dbutils.widgets.text(
+    "download_group", "download_hub_download_users", "Report download group"
+)
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
+view_group = dbutils.widgets.get("view_group")
+download_group = dbutils.widgets.get("download_group")
 
 schema_fqn = f"{catalog}.{schema}"
 gold_fqn = f"{schema_fqn}.daily_metrics"
@@ -356,9 +362,9 @@ if "volume_root" not in _config_cols:
     spark.sql(f"ALTER TABLE {config_fqn} ADD COLUMNS (volume_root STRING)")
     print("added report_config column: volume_root")
 
-# Seed a default view for report #1. `view_key` is a Databricks group name — add
-# your app users to it (and to `<view_key>_dl` for download) so they see the tab.
-default_view_key = "download_hub_app_users"
+# Seed a default view for report #1. `view_key` and `download_group` come from
+# bundle job parameters and must name Databricks groups in the target workspace.
+default_view_key = view_group
 spark.sql(
     f"""
     MERGE INTO {view_fqn} t
@@ -416,7 +422,7 @@ seed_rows = [
         "order_by": "sort_order",
         "display_order": 1,
         "enabled": True,
-        "download_group": None,  # None -> derived from view_key + suffix (_dl).
+        "download_group": download_group,
         "view_key": default_view_key,  # the default view's Databricks group
         "kind": "query",  # a query report (volume reports set kind='volume')
         "volume_root": None,
@@ -468,7 +474,7 @@ try:
     print(f"seeded demo volume {sample_vol_fqn} with {len(_demo_files)} files")
 
     # READ VOLUME lets the app (as the signed-in user, OBO) list + download files.
-    for _grp in (default_view_key, f"{default_view_key}_dl"):
+    for _grp in (default_view_key, download_group):
         spark.sql(f"GRANT READ VOLUME ON VOLUME {sample_vol_fqn} TO `{_grp}`")
     print(f"granted READ VOLUME on {sample_vol_fqn} to view + download groups")
 
@@ -485,7 +491,7 @@ try:
            volume_root, updated_at, updated_by)
         VALUES
           ('sample_docs', 'Sample Documents', NULL, NULL, NULL, NULL, NULL, 2, true,
-           NULL, '{default_view_key}', 'volume', '{sample_vol_path}',
+           '{download_group}', '{default_view_key}', 'volume', '{sample_vol_path}',
            current_timestamp(), 'seed')
         """
     )

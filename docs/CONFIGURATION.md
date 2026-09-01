@@ -1,5 +1,8 @@
 # Configuration Reference
 
+For the complete workspace, identity, warehouse, Unity Catalog, and
+service-principal setup sequence, see [ADMIN_SETUP.md](ADMIN_SETUP.md).
+
 ## Environment variables
 
 All app configuration comes from environment variables in `src/app/app.yaml`. Set these before deploying (or edit `app.yaml`, redeploy, and restart).

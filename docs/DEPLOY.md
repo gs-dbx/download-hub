@@ -1,5 +1,10 @@
 # Deploy
 
+For the complete Databricks-side configuration checklist—including app access,
+OBO warehouse permissions, Unity Catalog grants, administrator privileges, and
+the two different volume security models—start with
+[ADMIN_SETUP.md](ADMIN_SETUP.md).
+
 Deploying the **Data Download Hub** app to a Databricks workspace. Uses the Databricks CLI and the Databricks Asset Bundle in this repo. The bundle name is `download_hub`; the deployed app is named `download-hub`.
 
 > No secrets or tokens appear in this repo. Authentication is the CLI's OAuth profile and the runtime-injected app service-principal credentials.

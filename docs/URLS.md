@@ -31,6 +31,73 @@ Supported report parameters are:
 | `dir` | `asc` or `desc`. |
 | `{filter_field}` | One parameter for each filter configured for the report. |
 
+### Filter-field parameters
+
+`{filter_field}` is a placeholder, not a literal parameter name. Each report
+defines zero or more filters in its `filters_json` configuration. The `field`
+from each configured filter becomes the query-string key and download form-field
+name.
+
+For example, this configuration:
+
+```json
+[
+  {"field": "region", "label": "Region"},
+  {"field": "business_unit", "label": "Business unit"}
+]
+```
+
+creates the parameters `region` and `business_unit`:
+
+```text
+GET /report/sales?region=west&business_unit=consumer
+GET /report/sales/table?region=west&business_unit=consumer&page=1&size=50
+GET /report/sales/sql?region=west&business_unit=consumer
+```
+
+Filter behavior:
+
+- A non-empty value adds an equality condition for that field. Multiple filter
+  fields are combined with `AND`; the example selects rows where `region =
+  'west'` and `business_unit = 'consumer'`.
+- Omitting a configured field, or sending it with an empty value such as
+  `region=`, means no constraint for that field (the “all values” state).
+- Values must be URL-encoded. For example, `business_unit=Research%20%26%20Development`
+  represents `Research & Development`. Use a standard URL/query-string builder
+  instead of concatenating user input.
+- Matching uses the data source's SQL equality semantics, including its type,
+  case, and collation behavior. This is different from `q`, which performs a
+  case-insensitive contains search across displayed columns.
+- Filter values are sent to Databricks SQL as bound parameters; they are never
+  interpolated into SQL. The configured field name is validated as a bare SQL
+  identifier and must be present in the report query output.
+- Unknown query-string keys are ignored. A caller cannot introduce an arbitrary
+  filter column by adding a new parameter; only fields in `filters_json` apply.
+- The filter dropdown obtains its choices from the distinct, non-null values of
+  the configured field. For a date-scoped view, those choices are scoped to the
+  selected date.
+- Changing filters resets the browser UI to page 1. API-like callers should also
+  set `page=1` when changing a filter to avoid requesting a now-empty later page.
+
+The export route uses the same configured field names, but it is a form `POST`
+rather than a query string. For example:
+
+```text
+report_id=sales
+date=2026-08-31
+search=revenue
+region=west
+business_unit=consumer
+format=csv
+acknowledged=true
+justification=Quarterly analysis
+```
+
+Only the report's configured filters are read. Missing or empty filter form
+fields mean no constraint, matching the report-page behavior. The browser keeps
+these hidden export fields synchronized with the visible filter controls so the
+download represents the current view.
+
 ## Query-report endpoints
 
 | Method | Path | Input/output |
@@ -108,4 +175,3 @@ intentional maintenance decision.
 Authored assets are served below `/static/`, including `/static/css/`,
 `/static/js/`, `/static/img/`, and `/static/uswds/`. The app intentionally uses
 no external CDN URLs.
-

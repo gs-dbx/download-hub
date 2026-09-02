@@ -9,6 +9,10 @@ Use this as the primary installation checklist. [DEPLOY.md](DEPLOY.md) contains
 additional CLI detail, while [PERMISSIONS.md](PERMISSIONS.md) explains the
 authorization design.
 
+For background, user instructions, auditing, ongoing operations, and the full
+new-resource onboarding workflow, read
+[ADMIN_AND_USER_GUIDE.md](ADMIN_AND_USER_GUIDE.md).
+
 ## 1. Understand the three identities
 
 The app deliberately uses different identities for different operations:

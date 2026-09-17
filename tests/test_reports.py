@@ -174,17 +174,27 @@ def test_parse_report_config_malformed_columns_json_raises():
 
 
 def test_parse_report_config_missing_filters_json_defaults_empty():
-    """A missing filters_json key yields an empty filters list."""
+    """A missing filters_json key yields an empty filters list.
+
+    date_field is cleared so the legacy date_field->filter migration (tested
+    separately) does not add a filter; this isolates the JSON-default behavior.
+    """
     row = dict(_SEED_ROW)
     del row["filters_json"]
+    row["date_field"] = None
     rc = parse_report_config(row)
     assert rc.filters == []
 
 
 def test_parse_report_config_empty_filters_json_defaults_empty():
-    """An empty/None filters_json yields an empty filters list."""
+    """An empty/None filters_json yields an empty filters list.
+
+    date_field is cleared so the legacy date_field->filter migration (tested
+    separately) does not add a filter; this isolates the JSON-default behavior.
+    """
     row = dict(_SEED_ROW)
     row["filters_json"] = ""
+    row["date_field"] = None
     rc = parse_report_config(row)
     assert rc.filters == []
 

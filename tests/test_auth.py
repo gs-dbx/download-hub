@@ -11,7 +11,9 @@ from app.auth import (
     DEFAULT_DOWNLOAD_SUFFIX,
     DOWNLOAD_GROUP,
     USER_TOKEN_HEADER,
+    can_admin_any,
     can_view,
+    collection_admin_group,
     derive_download_group,
     effective_download_group,
     effective_view_group,
@@ -19,7 +21,9 @@ from app.auth import (
     extract_user_token,
     group_display_names,
     is_admin,
+    is_collection_admin,
     is_member,
+    is_system_admin,
     parse_scim_user_id,
 )
 
@@ -166,6 +170,50 @@ def test_is_admin():
     assert is_admin(_user("download_hub_admin_users")) is True
     assert is_admin(_user("nope")) is False
     assert is_admin(_user("custom_admins"), "custom_admins") is True
+
+
+def _view(view_key="ops", admin_group=None):
+    """A minimal ReportView-like object (only attrs auth reads)."""
+    return SimpleNamespace(view_key=view_key, admin_group=admin_group)
+
+
+def test_is_system_admin():
+    """is_system_admin checks membership of the (env-configurable) system group."""
+    assert is_system_admin(_user("sys_admins"), "sys_admins") is True
+    assert is_system_admin(_user("other"), "sys_admins") is False
+    # Defaults to ADMIN_GROUP for backward compatibility.
+    assert is_system_admin(_user("download_hub_admin_users")) is True
+
+
+def test_collection_admin_group_strips_and_defaults_empty():
+    """collection_admin_group returns the stripped group or '' when unset."""
+    assert collection_admin_group(_view(admin_group="  ops_admins ")) == "ops_admins"
+    assert collection_admin_group(_view(admin_group=None)) == ""
+    assert collection_admin_group(_view(admin_group="")) == ""
+    assert collection_admin_group(SimpleNamespace()) == ""  # no attr -> ""
+
+
+def test_is_collection_admin_requires_group_and_membership():
+    """A delegated admin must belong to the collection's admin_group."""
+    v = _view(admin_group="ops_admins")
+    assert is_collection_admin(_user("ops_admins"), v) is True
+    assert is_collection_admin(_user("other"), v) is False
+    # A collection with no admin_group has no delegated admins.
+    assert is_collection_admin(_user("ops_admins"), _view(admin_group=None)) is False
+
+
+def test_can_admin_any_system_or_any_collection():
+    """can_admin_any is True for a system admin OR any collection admin."""
+    views = [_view("ops", "ops_admins"), _view("fin", "fin_admins")]
+    # System admin: True regardless of collection membership.
+    assert can_admin_any(_user("sys"), views, "sys") is True
+    # Delegated admin of one collection: True.
+    assert can_admin_any(_user("fin_admins"), views, "sys") is True
+    # Member of no admin group: False.
+    assert can_admin_any(_user("plain_user"), views, "sys") is False
+    # No collections and not system: False (empty/None tolerated).
+    assert can_admin_any(_user("x"), [], "sys") is False
+    assert can_admin_any(_user("x"), None, "sys") is False
 
 
 def test_group_display_names_tolerates_missing_attrs():

@@ -31,34 +31,45 @@
     </p>
   </div>
 
+  {# Resource-collection management, System Config, and the cross-collection
+     Change/Audit logs are SYSTEM-admin only. A delegated (per-collection) admin
+     sees just the Resources tab, scoped server-side to their collection(s). #}
   <nav class="app-admintabs" aria-label="Admin sections">
+    {% if is_system_admin %}
     <button type="button" class="app-admintab app-admintab--active" data-tab="views">Resource Collections</button>
     <button type="button" class="app-admintab" data-tab="reports">Resources</button>
     <button type="button" class="app-admintab" data-tab="config">System Config</button>
     <button type="button" class="app-admintab" data-tab="changes">Change log</button>
     <button type="button" class="app-admintab" data-tab="audit">Audit Log</button>
+    {% else %}
+    <button type="button" class="app-admintab app-admintab--active" data-tab="reports">Resources</button>
+    {% endif %}
   </nav>
 
   {# =============================================================== Views #}
+  {% if is_system_admin %}
   <section class="app-admin__panel" data-panel="views">
     <h2 class="font-heading-lg">Resource collections</h2>
     <p class="font-body-sm text-base measure-5">
       A <strong>resource collection</strong> is a set of resources. Its <strong>collection key</strong> is the Databricks group that
       grants access; its <strong>title</strong> shows in the collection switcher. Share <code>/collection/&lt;key&gt;</code>
       to link directly to it. The download group is derived as
-      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a resource overrides it.
+      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a resource overrides it. The
+      <strong>admin group</strong> names the delegated admins who may edit only
+      this collection's resources (leave blank for system-admin-only).
     </p>
 
     <div class="app-tablewrap">
       <table class="usa-table usa-table--striped usa-table--borderless width-full">
         <thead>
-          <tr><th scope="col">Key (group)</th><th scope="col">Title</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
+          <tr><th scope="col">Key (group)</th><th scope="col">Title</th><th scope="col">Admin group</th><th scope="col">Order</th><th scope="col">Enabled</th><th scope="col"><span class="usa-sr-only">Actions</span></th></tr>
         </thead>
         <tbody>
           {% for v in views %}
           <tr>
             <th scope="row">{{ v.view_key }}</th>
             <td>{{ v.title }}</td>
+            <td>{{ v.admin_group or "—" }}</td>
             <td>{{ v.display_order }}</td>
             <td>{{ "Yes" if v.enabled else "No" }}</td>
             <td>
@@ -66,6 +77,7 @@
                 <button type="button" class="usa-button usa-button--outline usa-button--small"
                         data-role="view-edit"
                         data-view-key="{{ v.view_key }}" data-title="{{ v.title }}"
+                        data-admin-group="{{ v.admin_group or '' }}"
                         data-order="{{ v.display_order }}" data-enabled="{{ 'true' if v.enabled else 'false' }}">Edit</button>
                 {# Delete is a self-contained POST (works without admin.js): native
                    confirm guards the destructive action. Route redirects to /admin. #}
@@ -78,7 +90,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="5">No resource collections defined yet.</td></tr>
+          <tr><td colspan="6">No resource collections defined yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -97,6 +109,12 @@
           <label class="usa-label" for="view-title">Title (shown in collection switcher)</label>
           <input class="usa-input" id="view-title" name="title" required autocomplete="off">
         </div>
+        <div class="app-field">
+          <label class="usa-label" for="view-admin-group">Admin group (delegated admins)</label>
+          <input class="usa-input" id="view-admin-group" name="admin_group"
+                 pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
+          <span class="usa-hint">Optional Databricks group; its members may edit only this collection's resources. Blank = system admins only.</span>
+        </div>
         <div class="app-field app-field--narrow">
           <label class="usa-label" for="view-order">Display order</label>
           <input class="usa-input" id="view-order" name="display_order" type="number" value="1" min="1">
@@ -113,9 +131,12 @@
       </div>
     </form>
   </section>
+  {% endif %}{# is_system_admin (views panel) #}
 
   {# ============================================================= Reports #}
-  <section class="app-admin__panel" data-panel="reports" hidden>
+  {# Hidden by default only when the (system-only) Collections tab is present and
+     active; a collection admin lands here directly, so it stays visible. #}
+  <section class="app-admin__panel" data-panel="reports"{% if is_system_admin %} hidden{% endif %}>
     <h2 class="font-heading-lg">Resources</h2>
 
     <div class="app-tablewrap">
@@ -264,6 +285,8 @@
     </form>
   </section>
 
+  {# System Config + the cross-collection Change/Audit logs are system-only. #}
+  {% if is_system_admin %}
   {# ======================================================= System Config #}
   <section class="app-admin__panel" data-panel="config" hidden>
     <h2 class="font-heading-lg">System configuration</h2>
@@ -373,6 +396,7 @@
       </table>
     </div>
   </section>
+  {% endif %}{# is_system_admin (config/changes/audit panels) #}
 </div>
 {% endblock %}
 

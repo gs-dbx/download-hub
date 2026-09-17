@@ -24,11 +24,16 @@ dbutils.widgets.text("view_group", "download_hub_app_users", "Report view group"
 dbutils.widgets.text(
     "download_group", "download_hub_download_users", "Report download group"
 )
+# Delegated per-collection admin group (Databricks group). Members administer
+# ONLY this collection's reports. Blank => no delegated admins (system admins
+# only). System admins are configured app-side via SYSTEM_ADMIN_GROUP/ADMIN_GROUP.
+dbutils.widgets.text("collection_admin_group", "", "Collection admin group")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 view_group = dbutils.widgets.get("view_group")
 download_group = dbutils.widgets.get("download_group")
+collection_admin_group = dbutils.widgets.get("collection_admin_group").strip()
 
 schema_fqn = f"{catalog}.{schema}"
 gold_fqn = f"{schema_fqn}.daily_metrics"
@@ -314,7 +319,8 @@ spark.sql(
       display_order INT,
       enabled       BOOLEAN,
       updated_at    TIMESTAMP,
-      updated_by    STRING
+      updated_by    STRING,
+      admin_group   STRING
     ) USING DELTA
     """
 )
@@ -362,15 +368,29 @@ if "volume_root" not in _config_cols:
     spark.sql(f"ALTER TABLE {config_fqn} ADD COLUMNS (volume_root STRING)")
     print("added report_config column: volume_root")
 
+# Two-tier admin: report_view gains admin_group (the group that delegated
+# per-collection admins belong to). Idempotent add for older installs.
+_view_cols = {f.name for f in spark.table(view_fqn).schema.fields}
+if "admin_group" not in _view_cols:
+    spark.sql(f"ALTER TABLE {view_fqn} ADD COLUMNS (admin_group STRING)")
+    print("added report_view column: admin_group")
+
 # Seed a default view for report #1. `view_key` and `download_group` come from
 # bundle job parameters and must name Databricks groups in the target workspace.
+# `collection_admin_group` (optional) names the delegated per-collection admin
+# group; blank => NULL (system admins only). Guarded to a bare identifier so it
+# is safe to interpolate; anything else is treated as unset.
 default_view_key = view_group
+import re as _re  # stdlib; used only for the admin-group sanity check
+
+_ag_ok = bool(_re.fullmatch(r"[A-Za-z0-9_-]+", collection_admin_group))
+_admin_group_sql = f"'{collection_admin_group}'" if _ag_ok else "NULL"
 spark.sql(
     f"""
     MERGE INTO {view_fqn} t
     USING (SELECT '{default_view_key}' AS view_key) s ON t.view_key = s.view_key
-    WHEN NOT MATCHED THEN INSERT (view_key, title, display_order, enabled, updated_at, updated_by)
-    VALUES ('{default_view_key}', 'Daily Metrics', 1, true, current_timestamp(), 'seed')
+    WHEN NOT MATCHED THEN INSERT (view_key, title, display_order, enabled, updated_at, updated_by, admin_group)
+    VALUES ('{default_view_key}', 'Daily Metrics', 1, true, current_timestamp(), 'seed', {_admin_group_sql})
     """
 )
 

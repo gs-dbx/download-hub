@@ -933,6 +933,10 @@ class ReportView:
         display_order: Sort order among views.
         enabled: Whether the view is active.
         updated_by: Email of the admin who last wrote the row (bookkeeping).
+        admin_group: Databricks group whose members are DELEGATED admins of this
+            collection — they may edit only this collection's reports. ``None``/
+            empty means no delegated admins (system admins only). A bare
+            identifier.
     """
 
     view_key: str
@@ -940,6 +944,7 @@ class ReportView:
     display_order: int
     enabled: bool
     updated_by: str | None = None
+    admin_group: str | None = None
 
 
 def parse_report_view(row: dict) -> ReportView:
@@ -947,17 +952,20 @@ def parse_report_view(row: dict) -> ReportView:
 
     Args:
         row: A row dict with keys ``view_key``, ``title``, ``display_order``,
-            ``enabled``, and ``updated_by`` (optional).
+            ``enabled``, ``updated_by`` (optional), and ``admin_group``
+            (optional).
 
     Returns:
         The parsed :class:`ReportView`.
     """
+    admin_group = (row.get("admin_group") or "").strip() or None
     return ReportView(
         view_key=row["view_key"],
         title=row["title"],
         display_order=int(row["display_order"]),
         enabled=bool(row["enabled"]),
         updated_by=row.get("updated_by"),
+        admin_group=admin_group,
     )
 
 
@@ -979,7 +987,7 @@ def build_report_view_query(catalog: str, schema: str) -> str:
     if not catalog or not schema:
         raise ValueError("catalog and schema are required and must be non-empty")
     return (
-        "SELECT view_key, title, display_order, enabled, updated_by "
+        "SELECT view_key, title, display_order, enabled, updated_by, admin_group "
         f"FROM {catalog}.{schema}.report_view WHERE enabled = true ORDER BY display_order"
     )
 
@@ -1200,34 +1208,40 @@ def build_report_view_upsert(
         catalog: Unity Catalog catalog name.
         schema: Schema name.
         row: A dict with keys ``view_key``, ``title``, ``display_order``,
-            ``enabled``, ``updated_by``.
+            ``enabled``, ``updated_by``, and ``admin_group`` (optional; empty =>
+            NULL, i.e. no delegated collection admins).
 
     Returns:
         A tuple ``(sql, params)`` — ``params`` are ``{"name","value","type"}``
         dicts (every ``value`` a string).
 
     Raises:
-        ValueError: If ``catalog``/``schema`` is empty or ``view_key`` is not a
-            bare identifier.
+        ValueError: If ``catalog``/``schema`` is empty, or ``view_key`` /
+            (non-empty) ``admin_group`` is not a bare identifier.
     """
     if not catalog or not schema:
         raise ValueError("catalog and schema are required and must be non-empty")
     view_key = validate_identifier(row["view_key"])
+    # admin_group is an optional bare group identifier; blank means "no delegated
+    # admins" and is stored as NULL (via NULLIF below).
+    raw_admin_group = (row.get("admin_group") or "").strip()
+    admin_group = validate_identifier(raw_admin_group) if raw_admin_group else ""
 
     fqn = f"{catalog}.{schema}.report_view"
     set_cols = (
         "title=:title, display_order=CAST(:display_order AS INT), "
         "enabled=CAST(:enabled AS BOOLEAN), updated_at=current_timestamp(), "
-        "updated_by=:updated_by"
+        "updated_by=:updated_by, admin_group=NULLIF(:admin_group, '')"
     )
     sql = (
         f"MERGE INTO {fqn} t USING (SELECT :view_key AS view_key) s "
         "ON t.view_key = s.view_key "
         f"WHEN MATCHED THEN UPDATE SET {set_cols} "
         "WHEN NOT MATCHED THEN INSERT "
-        "(view_key, title, display_order, enabled, updated_at, updated_by) "
+        "(view_key, title, display_order, enabled, updated_at, updated_by, admin_group) "
         "VALUES (:view_key, :title, CAST(:display_order AS INT), "
-        "CAST(:enabled AS BOOLEAN), current_timestamp(), :updated_by)"
+        "CAST(:enabled AS BOOLEAN), current_timestamp(), :updated_by, "
+        "NULLIF(:admin_group, ''))"
     )
     params = [
         {"name": "view_key", "value": view_key, "type": "STRING"},
@@ -1235,6 +1249,7 @@ def build_report_view_upsert(
         {"name": "display_order", "value": str(int(row.get("display_order") or 1)), "type": "STRING"},
         {"name": "enabled", "value": str(bool(row.get("enabled", True))).lower(), "type": "STRING"},
         {"name": "updated_by", "value": str(row.get("updated_by") or ""), "type": "STRING"},
+        {"name": "admin_group", "value": admin_group, "type": "STRING"},
     ]
     return sql, params
 

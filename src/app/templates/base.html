@@ -115,7 +115,8 @@
   {# Full-page overlay shown on internal navigation — server renders can wait on
      a cold warehouse, so a click gives immediate feedback. app.js reveals it. #}
   <div class="app-navoverlay" data-role="nav-overlay" hidden aria-hidden="true">
-    <span class="app-spinner__dot" role="status" aria-label="Loading"></span>
+    <span class="app-spinner__dot" role="status" aria-label="Running query"></span>
+    <span class="app-navoverlay__label">Running query…</span>
   </div>
 
   <script src="/static/uswds/js/uswds.min.js" defer></script>

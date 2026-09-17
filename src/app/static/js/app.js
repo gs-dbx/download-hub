@@ -35,7 +35,17 @@
   var viewSwitcher = document.querySelector('[data-role="view-switcher"]');
   if (viewSwitcher)
     viewSwitcher.addEventListener("change", function () {
-      if (viewSwitcher.value) window.location.href = viewSwitcher.value;
+      if (viewSwitcher.value) {
+        // Switching collection is a server-rendered navigation that can run a
+        // query — reveal the "Running query…" overlay so the wait is intuitive
+        // (a <select> change is not an <a> click, so the link handler misses it).
+        var nav = document.querySelector('[data-role="nav-overlay"]');
+        if (nav) {
+          nav.hidden = false;
+          nav.setAttribute("aria-hidden", "false");
+        }
+        window.location.href = viewSwitcher.value;
+      }
     });
 
   // ---- Warehouse status badge (global) — poll /health/warehouse -------------

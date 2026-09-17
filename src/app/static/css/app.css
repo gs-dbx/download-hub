@@ -378,14 +378,22 @@ body {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.6rem;
   padding-top: 3rem;
   background-color: rgba(255, 255, 255, 0.6);
   z-index: 5;
 }
 .app-spinner[hidden] {
   display: none;
+}
+/* "Running query…" caption under the ring — makes an executing query obvious. */
+.app-spinner__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--app-navy);
 }
 
 /* Pure-CSS ring spinner — no external asset (air-gap safe). */
@@ -691,11 +699,19 @@ select,
   inset: 0;
   z-index: 1000;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background-color: rgba(255, 255, 255, 0.55);
+  gap: 0.75rem;
+  background-color: rgba(255, 255, 255, 0.7);
 }
 .app-navoverlay[hidden] { display: none; }
+/* "Running query…" caption so opening a resource clearly shows work in flight. */
+.app-navoverlay__label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--app-navy);
+}
 
 /* ---- Table-head strip: subtle SQL button, right-aligned ---- */
 .app-sqlbtn {

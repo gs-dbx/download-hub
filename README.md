@@ -46,7 +46,7 @@ resources/              Databricks Asset Bundle resources
   grants.sql            Unity Catalog grants
 
 databricks.yml          Databricks Asset Bundle manifest (catalog, schema, warehouse, groups)
-tests/                  pytest unit tests (pure functions, no SDK required, 323 passed)
+tests/                  pytest unit tests (pure functions, no SDK required, 344 passed)
 docs/
   ADMIN_AND_USER_GUIDE.md Complete operating, access, audit, user, and onboarding guide
   ADMIN_SETUP.md        Complete Databricks administrator setup checklist
@@ -80,7 +80,7 @@ cd download_hub
 PYTHONPATH=src python -m pytest -q
 ```
 
-Expected: 323 passed, 1 skipped.
+Expected: 344 passed, 1 skipped.
 
 ### 2. Deploy to Databricks Apps
 

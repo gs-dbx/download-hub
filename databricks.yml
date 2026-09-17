@@ -29,8 +29,11 @@ variables:
 
 workspace:
   # IRS GovCloud demo workspace. Auth via the `field-eng-aws-gov-demo-irs-demo`
-  # CLI profile (or set per target / via -p <profile>).
+  # CLI profile (or set per target / via -p <profile>). The profile is pinned
+  # because several local profiles share this host, which otherwise makes every
+  # bundle command ambiguous; override with -p <profile> if yours differs.
   host: https://field-eng-aws-gov-demo-irs-demo.cloud.databricks.us
+  profile: field-eng-aws-gov-demo-irs-demo
 
 targets:
   dev:

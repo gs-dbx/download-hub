@@ -10,23 +10,27 @@ include:
 variables:
   catalog:
     description: Unity Catalog holding the report_config registry + report/audit tables
-    default: main
+    default: irs_synthetic
   schema:
     description: Schema holding the report_config registry + report/audit tables
-    default: default
+    default: download_hub
   warehouse_id:
     description: Serverless SQL warehouse the app queries through (set to your id)
-    default: ""
+    default: "2f225c0740dcd22b"
   app_users_group:
-    description: Databricks group for basic app access
+    description: Databricks group for basic app access (also the seeded collection key)
     default: download_hub_app_users
   download_users_group:
     description: Databricks group for the gated download entitlement
     default: download_hub_download_users
+  collection_admin_group:
+    description: Delegated per-collection admin group seeded onto the sample collection
+    default: download_hub_operations_admins
 
 workspace:
-  # Replace with your workspace URL (or set per target / via the CLI profile).
-  host: https://YOUR-WORKSPACE.cloud.databricks.com
+  # IRS GovCloud demo workspace. Auth via the `field-eng-aws-gov-demo-irs-demo`
+  # CLI profile (or set per target / via -p <profile>).
+  host: https://field-eng-aws-gov-demo-irs-demo.cloud.databricks.us
 
 targets:
   dev:

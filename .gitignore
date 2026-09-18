@@ -5,5 +5,9 @@
 
 # Python
 .venv/
+.venv-test/
 __pycache__/
 *.pyc
+
+# Local tooling scratch (not part of the app)
+.isaac/

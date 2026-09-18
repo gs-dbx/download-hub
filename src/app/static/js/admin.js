@@ -92,6 +92,8 @@
     btn.addEventListener("click", function () {
       document.getElementById("view-key").value = btn.getAttribute("data-view-key") || "";
       document.getElementById("view-title").value = btn.getAttribute("data-title") || "";
+      var _ag = document.getElementById("view-admin-group");
+      if (_ag) _ag.value = btn.getAttribute("data-admin-group") || "";
       document.getElementById("view-order").value = btn.getAttribute("data-order") || "1";
       document.getElementById("view-enabled").checked =
         btn.getAttribute("data-enabled") === "true";

@@ -148,7 +148,13 @@ The interactive path does **not** cache result rows. Each interaction (load, fil
 search, sort, page) runs, OBO:
 
 - a `COUNT(*)` over the report query (with active filters/search) for the pager total, and
-- one page — `SELECT ... FROM ( source_query ) [WHERE …] ORDER BY <sort> LIMIT <size> OFFSET <page*size>`.
+- one page — `SELECT * FROM ( SELECT <cols> FROM ( source_query ) AS _q [WHERE …] ) AS _p [WHERE <search>] ORDER BY <sort> LIMIT <size> OFFSET <page*size>`.
+
+The `ORDER BY` is applied on the outer (`_p`) relation, whose columns are just the
+inner projection. So when a report orders by a column that isn't in `columns_json`
+(e.g. a canonical `sort_order`), the paging builder projects that column into the
+inner `SELECT` so the sort resolves; it is dropped from the rendered table, which
+shows only the configured display columns.
 
 `refresh=1` simply re-runs the query. Because only one page is ever fetched, a
 multi-million-row report never materializes in the app. Trade-offs to know:

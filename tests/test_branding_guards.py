@@ -63,3 +63,18 @@ def test_no_external_urls_in_authored_frontend():
             if text is not None and _URL_RE.search(text):
                 offenders.append(str(path.relative_to(_REPO_ROOT)))
     assert not offenders, f"External URL(s) found in authored files: {offenders}"
+
+
+def test_overlay_components_honor_hidden_attribute():
+    """Every full-cover overlay/spinner toggled by JS via the `hidden` attribute
+    MUST have a matching `.<component>[hidden] { display: none }` rule. These set
+    `display:flex`, which overrides the UA `[hidden]{display:none}`; without the
+    guard rule the overlay is visible on EVERY page regardless of state (the class
+    of bug that once left a "warehouse starting" scrim stuck over loaded data).
+    """
+    css = _read_text(_REPO_ROOT / "src" / "app" / "static" / "css" / "app.css")
+    assert css is not None, "app.css not found"
+    for component in (".app-spinner", ".app-navoverlay", ".app-field"):
+        assert re.search(
+            re.escape(component) + r"\[hidden\]\s*\{[^}]*display:\s*none", css
+        ), f"missing `{component}[hidden] {{ display: none }}` guard rule"

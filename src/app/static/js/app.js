@@ -35,7 +35,17 @@
   var viewSwitcher = document.querySelector('[data-role="view-switcher"]');
   if (viewSwitcher)
     viewSwitcher.addEventListener("change", function () {
-      if (viewSwitcher.value) window.location.href = viewSwitcher.value;
+      if (viewSwitcher.value) {
+        // Switching collection is a server-rendered navigation that can run a
+        // query — reveal the "Running query…" overlay so the wait is intuitive
+        // (a <select> change is not an <a> click, so the link handler misses it).
+        var nav = document.querySelector('[data-role="nav-overlay"]');
+        if (nav) {
+          nav.hidden = false;
+          nav.setAttribute("aria-hidden", "false");
+        }
+        window.location.href = viewSwitcher.value;
+      }
     });
 
   // ---- Warehouse status badge (global) — poll /health/warehouse -------------
@@ -323,6 +333,12 @@
   var dlReadyText = byRole("download-ready-text");
   var dlReadyLink = byRole("download-ready-link");
 
+  // Keep the button's loading state on-screen for a minimum time so a fast/small
+  // export still shows perceptible feedback (mirrors the table spinner's
+  // MIN_SPINNER_MS). Slightly longer here because this is a discrete click.
+  var MIN_DL_BTN_MS = 600;
+  var _dlBtnShownAt = 0;
+
   function showDownloadError(msg) {
     if (dlErrorText) dlErrorText.textContent = msg;
     if (dlError) dlError.hidden = false;
@@ -396,6 +412,7 @@
         dlSubmit.setAttribute("aria-disabled", "true");
         dlSubmit.innerHTML =
           '<span class="app-btn-spinner" aria-hidden="true"></span> Preparing download…';
+        _dlBtnShownAt = Date.now();
       }
       showSpinner();
       try {
@@ -436,9 +453,16 @@
       } finally {
         hideSpinner();
         if (dlSubmit) {
-          dlSubmit.disabled = false;
-          dlSubmit.removeAttribute("aria-disabled");
-          dlSubmit.innerHTML = _origBtnHTML;
+          // Restore only after the loading state has been visible for a minimum
+          // time, so a near-instant export doesn't flash by unnoticed. The button
+          // stays disabled during the wait, so it also guards against re-submits.
+          var elapsed = Date.now() - _dlBtnShownAt;
+          var wait = Math.max(0, MIN_DL_BTN_MS - elapsed);
+          setTimeout(function () {
+            dlSubmit.disabled = false;
+            dlSubmit.removeAttribute("aria-disabled");
+            dlSubmit.innerHTML = _origBtnHTML;
+          }, wait);
         }
       }
     });

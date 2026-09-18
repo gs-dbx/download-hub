@@ -153,6 +153,90 @@ def is_admin(me_user: Any, admin_group: str = ADMIN_GROUP) -> bool:
     return is_member(me_user, admin_group)
 
 
+# ---- Two-tier administration (system admins + per-collection admins) --------
+#
+# * SYSTEM admins administer EVERY resource collection's config and the
+#   collection -> admin-group mapping itself. Their group is env-configurable via
+#   ``SYSTEM_ADMIN_GROUP`` (read in ``main.py``); it defaults to
+#   :data:`SYSTEM_ADMIN_GROUP` below, which is :data:`ADMIN_GROUP`, so an existing
+#   single-tier install keeps working (its one admin group becomes the system
+#   tier).
+# * COLLECTION admins administer ONLY the reports in a resource collection whose
+#   ``admin_group`` names a group they belong to. They cannot create collections,
+#   edit the mapping, or move a report to a different collection (system-only).
+#
+# All three helpers are pure name-match (unit-testable offline); the ``me()`` I/O
+# lives in ``main.py`` (LOCKED DECISION L1).
+
+# Default app-wide ("system") admin group; overridable via SYSTEM_ADMIN_GROUP.
+SYSTEM_ADMIN_GROUP: str = ADMIN_GROUP
+
+
+def is_system_admin(me_user: Any, system_admin_group: str = SYSTEM_ADMIN_GROUP) -> bool:
+    """Return whether the user is an app-wide (system) administrator.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        system_admin_group: The system-admin group display name (env-configurable).
+
+    Returns:
+        ``True`` if the user is a member of ``system_admin_group``.
+    """
+    return is_member(me_user, system_admin_group)
+
+
+def collection_admin_group(view: Any) -> str:
+    """Return the admin group that administers a resource collection (or "").
+
+    Args:
+        view: A ``ReportView``-like object exposing an optional ``admin_group``.
+
+    Returns:
+        The collection's ``admin_group`` (stripped); ``""`` if unset — meaning no
+        delegated admins, so only system admins may edit that collection.
+    """
+    return (getattr(view, "admin_group", None) or "").strip()
+
+
+def is_collection_admin(me_user: Any, view: Any) -> bool:
+    """Return whether the user is a delegated admin of one resource collection.
+
+    This is the collection-scoped tier ONLY; it does NOT count system admins
+    (check :func:`is_system_admin` separately). ``True`` iff the collection has a
+    non-empty ``admin_group`` and the user belongs to it.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        view: The ``ReportView``-like collection (its ``admin_group`` is read).
+
+    Returns:
+        ``True`` if the user administers this specific collection.
+    """
+    group = collection_admin_group(view)
+    return bool(group) and is_member(me_user, group)
+
+
+def can_admin_any(
+    me_user: Any, views: Any, system_admin_group: str = SYSTEM_ADMIN_GROUP
+) -> bool:
+    """Return whether the user can administer at least one collection.
+
+    ``True`` for system admins (all collections) or for a delegated admin of any
+    collection in ``views``. Used to decide whether to surface the Admin nav link.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        views: An iterable of ``ReportView``-like collections (may be empty/None).
+        system_admin_group: The system-admin group display name.
+
+    Returns:
+        ``True`` if the user administers the app or any collection.
+    """
+    if is_system_admin(me_user, system_admin_group):
+        return True
+    return any(is_collection_admin(me_user, v) for v in (views or ()))
+
+
 def _get_case_insensitive(headers: Any, key: str) -> str | None:
     """Look up ``key`` in a headers-like object, case-insensitively.
 

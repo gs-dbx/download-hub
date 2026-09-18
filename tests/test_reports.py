@@ -174,17 +174,27 @@ def test_parse_report_config_malformed_columns_json_raises():
 
 
 def test_parse_report_config_missing_filters_json_defaults_empty():
-    """A missing filters_json key yields an empty filters list."""
+    """A missing filters_json key yields an empty filters list.
+
+    date_field is cleared so the legacy date_field->filter migration (tested
+    separately) does not add a filter; this isolates the JSON-default behavior.
+    """
     row = dict(_SEED_ROW)
     del row["filters_json"]
+    row["date_field"] = None
     rc = parse_report_config(row)
     assert rc.filters == []
 
 
 def test_parse_report_config_empty_filters_json_defaults_empty():
-    """An empty/None filters_json yields an empty filters list."""
+    """An empty/None filters_json yields an empty filters list.
+
+    date_field is cleared so the legacy date_field->filter migration (tested
+    separately) does not add a filter; this isolates the JSON-default behavior.
+    """
     row = dict(_SEED_ROW)
     row["filters_json"] = ""
+    row["date_field"] = None
     rc = parse_report_config(row)
     assert rc.filters == []
 
@@ -589,13 +599,29 @@ def test_parse_report_view():
     assert rv.title == "Operations"
     assert rv.display_order == 2
     assert rv.enabled is True
+    assert rv.admin_group is None  # absent -> None (no delegated admins)
+
+
+def test_parse_report_view_reads_admin_group():
+    """A non-empty admin_group is parsed (stripped); blank -> None."""
+    rv = parse_report_view(
+        {"view_key": "ops", "title": "Ops", "display_order": 1, "enabled": True,
+         "admin_group": "  ops_admins "}
+    )
+    assert rv.admin_group == "ops_admins"
+    rv_blank = parse_report_view(
+        {"view_key": "ops", "title": "Ops", "display_order": 1, "enabled": True,
+         "admin_group": ""}
+    )
+    assert rv_blank.admin_group is None
 
 
 def test_build_report_view_query_shape():
-    """The view registry query selects view_key/title, enabled, ordered."""
+    """The view registry query selects view_key/title/admin_group, ordered."""
     sql = build_report_view_query("main", "default")
     assert "FROM main.default.report_view" in sql
     assert "view_key" in sql and "title" in sql
+    assert "admin_group" in sql  # two-tier admin mapping column
     assert "WHERE enabled = true" in sql
     assert sql.strip().endswith("ORDER BY display_order")
 
@@ -716,6 +742,35 @@ def test_build_report_view_upsert_rejects_bad_view_key():
     """A non-identifier view_key raises ValueError."""
     with pytest.raises(ValueError):
         build_report_view_upsert("main", "default", {"view_key": "a-b", "title": "x", "display_order": "1", "enabled": True})
+
+
+def test_build_report_view_upsert_binds_admin_group_and_nullifs_blank():
+    """admin_group is bound and stored via NULLIF so blank becomes NULL."""
+    sql, params = build_report_view_upsert(
+        "main", "default",
+        {"view_key": "ops", "title": "Ops", "display_order": "1", "enabled": True,
+         "updated_by": "a@b", "admin_group": "ops_admins"},
+    )
+    assert "admin_group=NULLIF(:admin_group, '')" in sql  # UPDATE path
+    assert "NULLIF(:admin_group, '')" in sql              # INSERT path
+    by_name = {p["name"]: p["value"] for p in params}
+    assert by_name["admin_group"] == "ops_admins"
+    # Blank admin_group binds an empty string (NULLIF -> NULL at write time).
+    _sql, params2 = build_report_view_upsert(
+        "main", "default",
+        {"view_key": "ops", "title": "Ops", "display_order": "1", "enabled": True},
+    )
+    assert {p["name"]: p["value"] for p in params2}["admin_group"] == ""
+
+
+def test_build_report_view_upsert_rejects_bad_admin_group():
+    """A non-identifier admin_group raises ValueError."""
+    with pytest.raises(ValueError):
+        build_report_view_upsert(
+            "main", "default",
+            {"view_key": "ops", "title": "x", "display_order": "1", "enabled": True,
+             "admin_group": "bad group!"},
+        )
 
 
 # --- preview -------------------------------------------------------------
@@ -1190,6 +1245,39 @@ def test_page_query_sort_key_overrides_order_by_with_direction():
     # falls back to configured order_by when no sort_key
     sql2, _ = build_report_page_query(_PSRC, order_by="region")
     assert "ORDER BY region ASC" in sql2
+
+
+def test_page_query_projects_order_by_column_not_in_display_columns():
+    # Regression: paging orders on the OUTER (_p) relation, whose only columns are
+    # the inner projection. A report that projects an explicit column list but
+    # orders by a non-displayed column (e.g. a canonical sort_order) must still
+    # project that column into the inner query so the outer ORDER BY resolves
+    # rather than raising UNRESOLVED_COLUMN.
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="report_date",
+    )
+    assert "SELECT region, amount, report_date FROM (" in sql
+    assert "ORDER BY report_date ASC" in sql
+
+
+def test_page_query_does_not_duplicate_order_by_when_already_selected():
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="amount",
+    )
+    assert "SELECT region, amount FROM (" in sql  # not re-added
+    assert "ORDER BY amount ASC" in sql
+
+
+def test_page_query_sort_key_column_projected_into_inner():
+    # A clicked sort on a displayed column still works; the effective sort is
+    # sort_key, which is already in the projection, so no extra column is added.
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="report_date",
+        sort_key="amount", sort_dir="desc",
+    )
+    # sort_key wins, and it's already selected — inner stays the display list...
+    assert "SELECT region, amount FROM (" in sql
+    assert "ORDER BY amount DESC" in sql
 
 
 def test_page_query_numeric_sort_uses_try_cast():

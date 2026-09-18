@@ -27,7 +27,7 @@ A report is one of two **kinds** (the `kind` column; default `query`):
 | `date_field` | STRING | Legacy compatibility column. Leave NULL; configure date columns in `filters_json`. |
 | `columns_json` | STRING | JSON array of display columns (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of filter dropdowns (may be empty/omitted). |
-| `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). |
+| `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). May be **any column the `source_query` returns**, including one not listed in `columns_json` (e.g. a canonical `sort_order` used only for ordering). The paging layer projects it internally so the sort resolves; it is never shown as a display column. |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab). |
 | `enabled` | BOOLEAN | Whether the report is active. |
 | `download_group` | STRING | Optional per-report download group (`NULL` → derived from `view_key` + suffix). |

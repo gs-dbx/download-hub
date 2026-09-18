@@ -9,12 +9,12 @@ command:
 env:
   # Serverless SQL warehouse the app queries through — set to your warehouse id.
   - name: DATABRICKS_WAREHOUSE_ID
-    value: ""
+    value: "2f225c0740dcd22b"
   # Unity Catalog location of the report_config registry + report/audit tables.
   - name: APP_CATALOG
-    value: "main"
+    value: "irs_synthetic"
   - name: APP_SCHEMA
-    value: "default"
+    value: "download_hub"
   # Branding — white-label by config alone, no code change. APP_LOGO is a local
   # /static path (kept local for the air-gap guarantee). APP_ORG_NAME is the logo
   # alt text; it defaults to APP_NAME when unset.
@@ -25,10 +25,16 @@ env:
   - name: APP_LOGO
     value: "/static/img/logo.svg"
   - name: APP_VERSION
-    value: "0.6.0"
+    value: "0.7.2"
   # Workspace groups used for the admin console and derived download groups.
+  # ADMIN_GROUP is retained for backward compatibility; SYSTEM_ADMIN_GROUP is the
+  # app-wide (system) admin tier — members administer EVERY resource collection
+  # and the collection->admin-group mapping. Per-collection (delegated) admins are
+  # named by each collection's report_view.admin_group (edited in the console).
   - name: ADMIN_GROUP
-    value: "download_hub_admin_users"
+    value: "download_hub_system_admins"
+  - name: SYSTEM_ADMIN_GROUP
+    value: "download_hub_system_admins"
   - name: DOWNLOAD_GROUP_SUFFIX
     value: "_dl"
   # Global download kill switch: false/0/no/off disables downloads everywhere.
@@ -39,7 +45,7 @@ env:
   # principal and retrieved through the app instead of a 413. End users should
   # NOT receive direct access. Leave empty to keep the hard 413 for over-cap exports.
   - name: APP_EXPORT_VOLUME
-    value: ""
+    value: "/Volumes/irs_synthetic/download_hub/download_exports"
   # Large CSV exports are queried and written in bounded pages.
   - name: EXPORT_PAGE_ROWS
     value: "10000"

@@ -105,7 +105,7 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `date_field` | STRING | Legacy compatibility column. Leave NULL; all constraints, including dates, belong in `filters_json`. |
 | `columns_json` | STRING | JSON array of column objects (see below). Empty/NULL → show all query columns. |
 | `filters_json` | STRING | JSON array of `{"field", "label"}` objects (see below). May be empty `[]` or NULL. |
-| `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). |
+| `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). Can be any column the `source_query` returns — including one not in `columns_json` (e.g. a hidden `sort_order`); the paging layer projects it internally so ordering by a non-displayed column resolves. |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab, 2 = second, etc.). |
 | `enabled` | BOOLEAN | Whether the report is active (only `true` rows are shown). |
 | `download_group` | STRING | Optional per-report download group. If NULL, derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`). |

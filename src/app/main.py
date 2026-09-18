@@ -52,13 +52,15 @@ from audit import build_audit_insert, build_audit_row
 from auth import (
     ADMIN_GROUP,
     DEFAULT_DOWNLOAD_SUFFIX,
+    can_admin_any,
     can_view,
     effective_download_group,
     effective_view_group,
     extract_user_email,
     extract_user_token,
-    is_admin,
+    is_collection_admin,
     is_member,
+    is_system_admin,
     parse_scim_user_id,
 )
 from cache import (
@@ -149,6 +151,12 @@ _FOOTER_TEXT_ENV = os.environ.get("APP_FOOTER_TEXT")
 # Admin group + download-group naming suffix (env-overridable; see auth.py).
 _ADMIN_GROUP = (os.environ.get("ADMIN_GROUP") or "").strip() or ADMIN_GROUP
 _DL_SUFFIX = (os.environ.get("DOWNLOAD_GROUP_SUFFIX") or "").strip() or DEFAULT_DOWNLOAD_SUFFIX
+# App-wide ("system") admin group. Members administer EVERY resource collection
+# and the collection->admin-group mapping. Defaults to _ADMIN_GROUP so a
+# single-tier install keeps working (its one admin group becomes the system
+# tier); set SYSTEM_ADMIN_GROUP to separate the tiers. Per-collection (delegated)
+# admins are named by each collection's report_view.admin_group.
+_SYSTEM_ADMIN_GROUP = (os.environ.get("SYSTEM_ADMIN_GROUP") or "").strip() or _ADMIN_GROUP
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1387,7 +1395,12 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
     active_view = effective_view_group(report)
     nav_reports = _nav_reports(_reports_in_view(visible, active_view))
     view_switcher = _views_for_user(views, visible)
-    user_is_admin = is_admin(me_user, _ADMIN_GROUP) if me_user is not None else False
+    # Surface the Admin link for system admins OR any resource-collection admin.
+    user_is_admin = (
+        can_admin_any(me_user, views, _SYSTEM_ADMIN_GROUP)
+        if me_user is not None
+        else False
+    )
 
     # Volume reports browse a UC volume (single pinned root, traverse below,
     # metadata + download only, OBO reads) instead of querying a table — dispatch
@@ -2247,18 +2260,11 @@ async def volume_download(request: Request, report_id: str) -> Response:
 # immediately.
 
 
-async def _require_admin(request: Request):
-    """Return the admin's ``(token, email, me_user)`` or raise 401/403.
+async def _admin_identity(request: Request):
+    """Return ``(token, email, me_user)`` for the caller, or raise 401.
 
-    Args:
-        request: The incoming request (headers carry the OBO token/email).
-
-    Returns:
-        A tuple ``(token, email, me_user)`` for an authorized admin.
-
-    Raises:
-        HTTPException: 401 if the OBO token is missing; 403 if the user is not a
-            member of the admin group.
+    No role check — the tiered guards below layer authorization on top. Raises
+    401 only when the OBO token is missing.
     """
     try:
         token = extract_user_token(request.headers)
@@ -2266,11 +2272,78 @@ async def _require_admin(request: Request):
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     email = extract_user_email(request.headers)
     me_user = await _me(token)
-    if me_user is None or not is_admin(me_user, _ADMIN_GROUP):
+    return token, email, me_user
+
+
+async def _require_system_admin(request: Request):
+    """Authorize an APP-WIDE (system) administrator, or raise 401/403.
+
+    System admins (members of ``SYSTEM_ADMIN_GROUP``) administer every resource
+    collection and the collection->admin-group mapping. Used to gate creating/
+    editing/deleting collections, System Config, and the full audit export.
+    """
+    token, email, me_user = await _admin_identity(request)
+    if me_user is None or not is_system_admin(me_user, _SYSTEM_ADMIN_GROUP):
         raise HTTPException(
             status_code=403,
-            detail="Admin access required (membership of the admin group).",
+            detail="System administrator access required.",
         )
+    return token, _readable_email(me_user, email), me_user
+
+
+async def _require_any_admin(request: Request):
+    """Authorize a system admin OR a delegated admin of ANY collection.
+
+    Used for read/preview surfaces open to any administrator (the console entry
+    and the query-builder preview). Per-collection write authorization is
+    enforced separately by :func:`_require_report_admin`.
+    """
+    token, email, me_user = await _admin_identity(request)
+    if me_user is not None and is_system_admin(me_user, _SYSTEM_ADMIN_GROUP):
+        return token, _readable_email(me_user, email), me_user
+    if me_user is not None and can_admin_any(
+        me_user, await _load_views(), _SYSTEM_ADMIN_GROUP
+    ):
+        return token, _readable_email(me_user, email), me_user
+    raise HTTPException(
+        status_code=403,
+        detail="Admin access required (system admin or a resource-collection admin group).",
+    )
+
+
+async def _require_report_admin(request: Request, view_keys):
+    """Authorize editing reports in the given collection(s), or raise 401/403.
+
+    System admins pass unconditionally. A delegated (collection) admin must
+    administer EVERY collection in ``view_keys`` — this is passed the report's
+    current AND target ``view_key`` on save, so a collection admin can neither
+    pull a report out of a collection they don't own nor push one into another.
+
+    Args:
+        request: The incoming request.
+        view_keys: An iterable of ``view_key`` strings the action touches.
+    """
+    token, email, me_user = await _admin_identity(request)
+    if me_user is None:
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    if is_system_admin(me_user, _SYSTEM_ADMIN_GROUP):
+        return token, _readable_email(me_user, email), me_user
+    keys = {k for k in view_keys if k}
+    if not keys:
+        # A delegated admin must always act within a resource collection; a report
+        # with no collection (or a cross-collection move to none) is system-only.
+        raise HTTPException(
+            status_code=403,
+            detail="A resource-collection admin must act within a collection.",
+        )
+    by_key = {v.view_key: v for v in await _load_views()}
+    for vk in keys:
+        view = by_key.get(vk)
+        if view is None or not is_collection_admin(me_user, view):
+            raise HTTPException(
+                status_code=403,
+                detail=f"You are not an administrator for resource collection {vk!r}.",
+            )
     return token, _readable_email(me_user, email), me_user
 
 
@@ -2295,18 +2368,6 @@ async def admin_page(request: Request) -> Response:
             status_code=401,
         )
     me_user = await _me(token)
-    if me_user is None or not is_admin(me_user, _ADMIN_GROUP):
-        return templates.TemplateResponse(
-            request,
-            "error.html",
-            {
-                "message": "Admin access required. Ask an administrator to add "
-                "you to the admin group.",
-                "nav_reports": [],
-                "active_report_id": "",
-            },
-            status_code=403,
-        )
     try:
         configs = await _load_reports()
         views = await _load_views()
@@ -2317,54 +2378,80 @@ async def admin_page(request: Request) -> Response:
             {"message": str(exc), "nav_reports": [], "active_report_id": ""},
             status_code=503,
         )
+    # Entry: a system admin OR a delegated admin of at least one collection.
+    is_sys = me_user is not None and is_system_admin(me_user, _SYSTEM_ADMIN_GROUP)
+    if not is_sys and not (
+        me_user is not None and can_admin_any(me_user, views, _SYSTEM_ADMIN_GROUP)
+    ):
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": "Admin access required. Ask an administrator to add you "
+                "to the admin group, or to a resource collection's admin group.",
+                "nav_reports": [],
+                "active_report_id": "",
+            },
+            status_code=403,
+        )
+    # Which collections this caller may administer. System admins: all (sentinel
+    # None). Collection admins: only those whose admin_group they belong to.
+    if is_sys:
+        views_admin = list(views)
+        admined_keys = None
+    else:
+        views_admin = [v for v in views if is_collection_admin(me_user, v)]
+        admined_keys = {v.view_key for v in views_admin}
     # System Config: current effective disclaimer + chrome text for the editor.
     # _effective_disclaimer() warms _config_cache, so the banner/footer readers
     # below reflect the stored values (blank included) rather than a cold default.
     current_disclaimer = await _effective_disclaimer()
     current_banner_text = _effective_banner_text()
     current_footer_text = _effective_footer_text()
-    # Audit Log: recent downloads (SP read; tolerate a missing table).
+    # Audit Log + Change log: cross-collection download/mutation history — visible
+    # to SYSTEM admins only (a collection admin should not see other collections'
+    # activity). For a collection admin these stay empty and the tabs are hidden.
     audit_columns = list(AUDIT_LOG_COLUMNS)
     audit_rows: list[list[str]] = []
-    try:
-        acols, adata = await _run_sql_sp_query(
-            build_audit_log_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 200)
-        )
-        aidx = {c: i for i, c in enumerate(acols)}
-        audit_rows = [
-            ["" if row[aidx[c]] is None else str(row[aidx[c]]) for c in audit_columns]
-            for row in adata
-        ]
-    except RuntimeError:
-        audit_rows = []  # no audit table / unreadable -> empty tab
-    # Change log: recent admin mutations (SP read; tolerate a missing table).
     config_audit_columns = list(CONFIG_AUDIT_COLUMNS)
     config_audit_rows: list[list[str]] = []
     config_audit_analytics: list[list[str]] = []
-    try:
-        ccols, cdata = await _run_sql_sp_query(
-            build_config_audit_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 200)
-        )
-        cidx = {c: i for i, c in enumerate(ccols)}
-        config_audit_rows = [
-            ["" if row[cidx[c]] is None else str(row[cidx[c]]) for c in config_audit_columns]
-            for row in cdata
-        ]
-        # Analytics: recent mutations by entity_type + action
-        acols, adata = await _run_sql_sp_query(
-            build_config_audit_analytics_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 30)
-        )
-        aidx = {c: i for i, c in enumerate(acols)}
-        config_audit_analytics = [
-            [
-                row[aidx.get("entity_type", 0)] or "",
-                row[aidx.get("action", 1)] or "",
-                str(row[aidx.get("n", 2)] or 0),
+    if is_sys:
+        try:
+            acols, adata = await _run_sql_sp_query(
+                build_audit_log_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 200)
+            )
+            aidx = {c: i for i, c in enumerate(acols)}
+            audit_rows = [
+                ["" if row[aidx[c]] is None else str(row[aidx[c]]) for c in audit_columns]
+                for row in adata
             ]
-            for row in adata
-        ]
-    except RuntimeError:
-        config_audit_rows = []  # no config_audit table / unreadable -> empty tab
+        except RuntimeError:
+            audit_rows = []  # no audit table / unreadable -> empty tab
+        try:
+            ccols, cdata = await _run_sql_sp_query(
+                build_config_audit_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 200)
+            )
+            cidx = {c: i for i, c in enumerate(ccols)}
+            config_audit_rows = [
+                ["" if row[cidx[c]] is None else str(row[cidx[c]]) for c in config_audit_columns]
+                for row in cdata
+            ]
+            # Analytics: recent mutations by entity_type + action
+            acols, adata = await _run_sql_sp_query(
+                build_config_audit_analytics_query(_env("APP_CATALOG"), _env("APP_SCHEMA"), 30)
+            )
+            aidx = {c: i for i, c in enumerate(acols)}
+            config_audit_analytics = [
+                [
+                    row[aidx.get("entity_type", 0)] or "",
+                    row[aidx.get("action", 1)] or "",
+                    str(row[aidx.get("n", 2)] or 0),
+                ]
+                for row in adata
+            ]
+        except RuntimeError:
+            config_audit_rows = []  # no config_audit table / unreadable -> empty tab
 
     # Show emails, not the raw numeric SCIM id, in both logs. Resolve the DISTINCT
     # ids once (cached), then remap the identity column in each row.
@@ -2408,6 +2495,9 @@ async def admin_page(request: Request) -> Response:
             "effective_download_group": effective_download_group(c, _DL_SUFFIX),
         }
         for c in configs
+        # Collection admins only see/edit reports in collections they administer;
+        # system admins (admined_keys is None) see all.
+        if admined_keys is None or (c.view_key or "") in admined_keys
     ]
     return templates.TemplateResponse(
         request,
@@ -2416,7 +2506,7 @@ async def admin_page(request: Request) -> Response:
             "nav_reports": [],
             "active_report_id": "",
             "reports": reports_admin,
-            "views": views,
+            "views": views_admin,
             "dl_suffix": _DL_SUFFIX,
             "current_disclaimer": current_disclaimer,
             "current_banner_text": current_banner_text,
@@ -2427,6 +2517,9 @@ async def admin_page(request: Request) -> Response:
             "config_audit_rows": config_audit_rows,
             "config_audit_analytics": config_audit_analytics,
             "user_is_admin": True,
+            # Drives system-only UI (collection mapping editor, System Config,
+            # Audit/Change-log tabs, collection create/delete).
+            "is_system_admin": is_sys,
             "app_version": _env("APP_VERSION", "0.0.0"),
         },
     )
@@ -2449,7 +2542,7 @@ async def admin_preview(request: Request) -> Response:
         suggested display format), and sample ``rows``, or
         ``{"error": "..."}`` with a 400/503 status.
     """
-    token, _email, _me_user = await _require_admin(request)
+    token, _email, _me_user = await _require_any_admin(request)
     form = await request.form()
     source_query = str(form.get("source_query", ""))
     try:
@@ -2487,10 +2580,21 @@ async def admin_save_report(request: Request) -> Response:
         A JSON ``{"ok": true}`` on success, or ``{"error": "..."}`` (400 invalid
         config / 503 write failed).
     """
-    _token, email, _me_user = await _require_admin(request)
     form = await request.form()
+    report_id = str(form.get("report_id", "")).strip()
+    target_view_key = str(form.get("view_key", "")).strip()
+    # Load current reports first — needed BOTH to authorize (a collection admin
+    # must administer the report's current AND target collection, so they can
+    # neither pull a report out of a collection they don't own nor push one into
+    # another) and to decide create-vs-update.
+    configs = await _load_reports()
+    current = next((c for c in configs if c.report_id == report_id), None)
+    current_view_key = (current.view_key or "") if current is not None else ""
+    _token, email, _me_user = await _require_report_admin(
+        request, {current_view_key, target_view_key}
+    )
     row = {
-        "report_id": str(form.get("report_id", "")).strip(),
+        "report_id": report_id,
         "title": str(form.get("title", "")).strip(),
         "kind": str(form.get("kind", "query")).strip() or "query",
         "volume_root": str(form.get("volume_root", "")).strip(),
@@ -2505,13 +2609,11 @@ async def admin_save_report(request: Request) -> Response:
         "enabled": str(form.get("enabled", "true")).strip().lower()
         in {"true", "on", "1", "yes"},
         "download_group": str(form.get("download_group", "")).strip(),
-        "view_key": str(form.get("view_key", "")).strip(),
+        "view_key": target_view_key,
         "updated_by": email,
     }
-    # Load current reports to determine if this is a create or update
-    configs = await _load_reports()
     existing = {c.report_id for c in configs}
-    action = decide_action(existing, row["report_id"])
+    action = decide_action(existing, report_id)
     try:
         sql, param_dicts = build_report_config_upsert(
             _env("APP_CATALOG"), _env("APP_SCHEMA"), row
@@ -2552,9 +2654,13 @@ async def admin_delete_report(request: Request) -> Response:
         A 303 redirect to ``/admin`` on success; a JSON ``{"error": ...}`` with
         400 (bad id) / 503 (write failed).
     """
-    _token, email, _me_user = await _require_admin(request)
     form = await request.form()
     report_id = str(form.get("report_id", "")).strip()
+    # Authorize against the report's current collection (system admins pass any).
+    configs = await _load_reports()
+    current = next((c for c in configs if c.report_id == report_id), None)
+    current_view_key = (current.view_key or "") if current is not None else ""
+    _token, email, _me_user = await _require_report_admin(request, {current_view_key})
     try:
         sql, param_dicts = build_report_config_delete(
             _env("APP_CATALOG"), _env("APP_SCHEMA"), report_id
@@ -2594,7 +2700,7 @@ async def admin_delete_view(request: Request) -> Response:
         A 303 redirect to ``/admin`` on success; a JSON ``{"error": ...}`` with
         400 (bad key) / 503 (write failed).
     """
-    _token, email, _me_user = await _require_admin(request)
+    _token, email, _me_user = await _require_system_admin(request)
     form = await request.form()
     view_key = str(form.get("view_key", "")).strip()
     try:
@@ -2632,7 +2738,7 @@ async def admin_save_view(request: Request) -> Response:
         A JSON ``{"ok": true}`` on success, or ``{"error": "..."}`` (400 invalid
         / 503 write failed).
     """
-    _token, email, _me_user = await _require_admin(request)
+    _token, email, _me_user = await _require_system_admin(request)
     form = await request.form()
     row = {
         "view_key": str(form.get("view_key", "")).strip(),
@@ -2690,7 +2796,7 @@ async def admin_save_config(request: Request) -> Response:
         A JSON ``{"ok": true, "saved": [keys]}`` on success, or ``{"error": ...}``
         (400 invalid key / 503 write failed).
     """
-    _token, email, _me_user = await _require_admin(request)
+    _token, email, _me_user = await _require_system_admin(request)
     form = await request.form()
     # (config_key, submitted form value). form.get -> None means the field was
     # not submitted at all (leave the stored value untouched); "" means clear it.
@@ -2741,7 +2847,7 @@ async def admin_audit_csv(request: Request) -> Response:
         (401/403) if the caller is not an authorized admin.
     """
     try:
-        _token, _email, _me_user = await _require_admin(request)
+        _token, _email, _me_user = await _require_system_admin(request)
     except HTTPException as exc:
         return templates.TemplateResponse(
             request,

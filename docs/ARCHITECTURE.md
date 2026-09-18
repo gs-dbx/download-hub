@@ -138,6 +138,12 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `friendly_error()` — map a raw DB/SDK error to a concise message + safe `(Details: …)` excerpt (genuine authorization phrases only → permission message)
 - `ReportDataError` — RuntimeError carrying already-friendly text
 
+**`diagnostics.py`** — Blind-deploy self-check builders (pure)
+- `env_report()` / `mask_secret()` — env table with secret values masked to presence + length
+- `make_check()` / `check_from_exc()` / `summarize()` — build & roll up independently-caught check results
+- `runtime_info()` / `package_versions()` / `format_traceback()` / `boot_banner()` — build detail the I/O layer surfaces
+- Wired in `main.py`: a global exception handler renders the real error (type/message/traceback) instead of a bare 500; a startup banner prints to stdout; `GET /_diag` (HTML) + `GET /health/diag` (JSON) run the live battery (SP identity, warehouse state, config-table read, export volume). All unauthenticated so they work when auth itself is broken.
+
 ---
 
 ## Caching model

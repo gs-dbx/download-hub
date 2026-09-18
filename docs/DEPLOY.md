@@ -86,6 +86,43 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 > **OBO pages can't be smoke-tested with a bearer token.** A direct `Authorization: Bearer` request does **not** reproduce the Apps proxy's `X-Forwarded-Access-Token` (on-behalf-of-user) flow, so OBO-gated pages/endpoints answer as a *different* identity and may return a spurious 403. Server-side verification is limited to the served version + markup presence; the real reports / volume-browse / admin / download click-through must be done in a browser signed in as a member of the relevant group.
 
+### Debugging a failed deploy (no app logs? use the built-in diagnostics)
+
+A bare **"Internal Server Error"** after deploy means the app either failed to
+**boot** (a missing static dir, a bad import, unset required config) or threw on
+the **first request** (unreachable warehouse, missing config tables, SP without
+grants). When the target environment does not surface app logs, use the built-in
+self-diagnostics instead — these are **unauthenticated on purpose** so they work
+even when auth/OBO is the thing that is broken:
+
+| Endpoint | What it gives you |
+|---|---|
+| **`/_diag`** | A human-readable page: overall pass/fail, each check (boot, static/templates dirs, required env, **app SP identity**, **warehouse state**, **config-table read**, **export volume**), a masked env table, the Python/platform build, and installed package versions. |
+| **`/health/diag`** | The same report as JSON (scriptable). |
+| **`/health`** | Liveness plus `version` and `boot_ok`. |
+
+```bash
+# Reachable without OBO — open in a browser, or:
+curl -s "https://<your-app-host>/health/diag" | python3 -m json.tool
+```
+
+Each check is independently caught, so one failure never hides the rest. Every
+**unhandled** error now renders the exception type, message, and full traceback
+in the page (not a bare 500), and the same detail is printed to stdout at
+startup as a banner (a one-line-per-check summary) for targets that *do* have
+logs. Secret env values are always masked to a presence + length summary.
+
+Common signals and fixes:
+
+| `/_diag` shows | Fix |
+|---|---|
+| `boot` FAIL — static mount failed | Source didn't sync; redeploy (`bundle deploy` then `bundle run`). |
+| `required_env` FAIL — missing `APP_CATALOG`/`APP_SCHEMA`/… | Set the env in `app.yaml` (or the bundle) and redeploy. |
+| `app_sp_identity` FAIL | The SP OAuth creds aren't injected/valid — check the app resource + host. |
+| `warehouse` FAIL | Wrong `DATABRICKS_WAREHOUSE_ID`, or the SP lacks `CAN USE` on it. |
+| `config_table` FAIL | Run the schema-init job (section 3), or grant the SP registry-table access (section 6). |
+| `export_volume` WARN | Optional — set `APP_EXPORT_VOLUME` + grant the SP `READ/WRITE VOLUME` only if you need large-CSV delivery. |
+
 ## 5. Create the two groups
 
 Two Databricks groups gate the app. Create them via the UI or API:

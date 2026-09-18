@@ -1,0 +1,90 @@
+{#
+  diag.html — human-readable diagnostics (L8). Rendered by GET /_diag; the same
+  data is available as JSON at GET /health/diag. No auth: this page is meant to
+  be reachable on a broken deploy. Secret env values are masked upstream
+  (diagnostics.env_report); all values are Jinja-autoescaped. Air-gap safe — no
+  external URLs, styling is inline + USWDS utility classes only.
+#}
+{% extends "base.html" %}
+
+{% block title %}Diagnostics &mdash; {{ app_name }}{% endblock %}
+
+{% block content %}
+<h1>App diagnostics</h1>
+
+{% set s = diag.summary %}
+<div class="usa-alert usa-alert--{{ 'success' if s.ok else 'error' }}" role="status">
+  <div class="usa-alert__body">
+    <h2 class="usa-alert__heading">
+      {{ 'All checks passed' if s.ok else 'Problems detected' }}
+    </h2>
+    <p class="usa-alert__text">
+      Version <strong>{{ diag.version }}</strong> —
+      {{ s.passed }}/{{ s.total }} ok, {{ s.failed }} failed, {{ s.warned }} warning(s).
+      Full JSON at <code>/health/diag</code>.
+    </p>
+  </div>
+</div>
+
+{% if diag.boot_errors %}
+<h2>Boot errors</h2>
+<ul>
+  {% for e in diag.boot_errors %}<li><code>{{ e }}</code></li>{% endfor %}
+</ul>
+{% endif %}
+
+<h2>Checks</h2>
+<table class="usa-table usa-table--striped width-full">
+  <thead>
+    <tr><th scope="col">Check</th><th scope="col">Status</th><th scope="col">Detail</th></tr>
+  </thead>
+  <tbody>
+    {% for c in diag.checks %}
+    <tr>
+      <th scope="row"><code>{{ c.name }}</code></th>
+      <td>
+        {% if c.status == 'ok' %}<span style="color:#00a91c;font-weight:700">&#10003; OK</span>
+        {% elif c.status == 'warn' %}<span style="color:#e5a000;font-weight:700">&#9888; WARN</span>
+        {% else %}<span style="color:#d63e04;font-weight:700">&#10007; FAIL</span>{% endif %}
+      </td>
+      <td>{{ c.detail }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Environment</h2>
+<p class="font-body-3xs text-base">Secret values are masked to presence + length; they are never shown.</p>
+<table class="usa-table usa-table--striped width-full">
+  <thead>
+    <tr><th scope="col">Variable</th><th scope="col">Value</th></tr>
+  </thead>
+  <tbody>
+    {% for row in diag.env %}
+    <tr>
+      <th scope="row"><code>{{ row.name }}</code>{% if row.secret %} <span class="text-base">(secret)</span>{% endif %}</th>
+      <td>{% if row.present %}{{ row.display }}{% else %}<span class="text-base">{{ row.display }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Runtime</h2>
+<ul>
+  <li>Python: <code>{{ diag.runtime.python }}</code></li>
+  <li>Platform: <code>{{ diag.runtime.platform }}</code></li>
+  <li>Executable: <code>{{ diag.runtime.executable }}</code></li>
+</ul>
+
+<h2>Packages</h2>
+<table class="usa-table usa-table--striped">
+  <thead>
+    <tr><th scope="col">Package</th><th scope="col">Version</th></tr>
+  </thead>
+  <tbody>
+    {% for p in diag.packages %}
+    <tr><th scope="row"><code>{{ p.name }}</code></th><td>{{ p.version }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1247,6 +1247,39 @@ def test_page_query_sort_key_overrides_order_by_with_direction():
     assert "ORDER BY region ASC" in sql2
 
 
+def test_page_query_projects_order_by_column_not_in_display_columns():
+    # Regression: paging orders on the OUTER (_p) relation, whose only columns are
+    # the inner projection. A report that projects an explicit column list but
+    # orders by a non-displayed column (e.g. a canonical sort_order) must still
+    # project that column into the inner query so the outer ORDER BY resolves
+    # rather than raising UNRESOLVED_COLUMN.
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="report_date",
+    )
+    assert "SELECT region, amount, report_date FROM (" in sql
+    assert "ORDER BY report_date ASC" in sql
+
+
+def test_page_query_does_not_duplicate_order_by_when_already_selected():
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="amount",
+    )
+    assert "SELECT region, amount FROM (" in sql  # not re-added
+    assert "ORDER BY amount ASC" in sql
+
+
+def test_page_query_sort_key_column_projected_into_inner():
+    # A clicked sort on a displayed column still works; the effective sort is
+    # sort_key, which is already in the projection, so no extra column is added.
+    sql, _ = build_report_page_query(
+        _PSRC, columns=["region", "amount"], order_by="report_date",
+        sort_key="amount", sort_dir="desc",
+    )
+    # sort_key wins, and it's already selected — inner stays the display list...
+    assert "SELECT region, amount FROM (" in sql
+    assert "ORDER BY amount DESC" in sql
+
+
 def test_page_query_numeric_sort_uses_try_cast():
     sql, _ = build_report_page_query(_PSRC, sort_key="amount", numeric_sort=True)
     assert "ORDER BY TRY_CAST(amount AS DOUBLE) ASC" in sql

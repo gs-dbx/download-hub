@@ -824,9 +824,26 @@ def build_report_page_query(
     Raises:
         ValueError: If any identifier or the source query is invalid.
     """
+    # Ordering is applied on the OUTER (_p) query, whose only columns are the inner
+    # projection. When the report projects an explicit column list and orders by a
+    # column that isn't in it (e.g. a canonical ``sort_order`` that isn't displayed),
+    # the inner query must still project that column so the outer ORDER BY resolves.
+    # An empty column list => inner ``SELECT *`` already exposes every column; an
+    # aggregated report can't carry an extra bare column through its GROUP BY, so
+    # that (invalid) case is left to surface its own error.
+    effective_sort = sort_key or order_by
+    inner_columns = list(columns) if columns else None
+    if (
+        effective_sort
+        and inner_columns
+        and not aggregates
+        and effective_sort not in inner_columns
+    ):
+        inner_columns = inner_columns + [effective_sort]
+
     inner_sql, params = build_report_query(
         source_query,
-        columns=columns,
+        columns=inner_columns,
         date_field=date_field,
         report_date=report_date,
         filters=filters,
@@ -837,7 +854,6 @@ def build_report_page_query(
     predicate, params = _search_predicate(search, search_columns, params)
     if predicate:
         sql += f" WHERE {predicate}"
-    effective_sort = sort_key or order_by
     if effective_sort:
         col = validate_identifier(effective_sort)
         direction = "DESC" if str(sort_dir).lower() == "desc" else "ASC"

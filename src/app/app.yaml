@@ -25,7 +25,7 @@ env:
   - name: APP_LOGO
     value: "/static/img/logo.svg"
   - name: APP_VERSION
-    value: "0.7.0"
+    value: "0.7.1"
   # Workspace groups used for the admin console and derived download groups.
   # ADMIN_GROUP is retained for backward compatibility; SYSTEM_ADMIN_GROUP is the
   # app-wide (system) admin tier — members administer EVERY resource collection

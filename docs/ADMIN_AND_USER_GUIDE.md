@@ -114,10 +114,17 @@ bookmarkable. **View SQL** shows the effective query for transparency.
 
 If authorized, choose **Download**, select CSV or XLSX, acknowledge the handling
 statement, and provide a meaningful business justification. The export reflects
-current filters and search. Small files return directly; large CSVs are fetched
-in bounded pages, staged privately, and streamed through the app. XLSX remains
-subject to the configured direct-result cap. Volume resources use the same
-acknowledgement and justification control for files.
+current filters and search. When you submit, the **Download** button shows a
+spinner and reads **"Preparing download…"** while the file is built — a small
+file then downloads on its own and the dialog closes. A **large CSV** is staged
+privately instead of downloaded directly: the dialog keeps the acknowledgement
+open and shows a **"Your export is ready"** panel with a link to retrieve the
+saved file. Small files return directly; large CSVs are fetched in bounded pages,
+staged privately, and streamed through the app. XLSX remains subject to the
+configured direct-result cap; an oversized Excel request asks you to choose CSV.
+If the export cannot be built, the dialog shows the specific reason inline rather
+than a full-page error. Volume resources use the same acknowledgement and
+justification control for files.
 
 | Symptom | Action |
 |---|---|

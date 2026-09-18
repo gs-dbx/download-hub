@@ -9,4 +9,24 @@
     <p class="usa-alert__text">{{ message }}</p>
   </div>
 </div>
+
+{#
+  Verbose failure detail (L8): shown only when the global exception handler
+  passes it (a genuinely unhandled 500). Ordinary 4xx pages omit these keys, so
+  this block stays hidden. All values are Jinja-autoescaped; no external URLs.
+  Diagnostics live at /_diag.
+#}
+{% if error_type %}
+<div class="margin-top-2 padding-2" style="border:1px solid #d63e04;background:#fef2f2">
+  <p class="margin-top-0"><strong>{{ error_type }}</strong>: {{ error_detail }}</p>
+  {% if error_path %}<p class="font-body-3xs text-base">While handling <code>{{ error_path }}</code></p>{% endif %}
+  {% if traceback %}
+  <details open>
+    <summary>Traceback</summary>
+    <pre style="overflow-x:auto;white-space:pre-wrap;font-size:0.8rem">{{ traceback }}</pre>
+  </details>
+  {% endif %}
+  <p class="font-body-3xs text-base margin-bottom-0">More at <code>/_diag</code> and <code>/health/diag</code>.</p>
+</div>
+{% endif %}
 {% endblock %}

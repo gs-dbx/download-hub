@@ -228,7 +228,7 @@ cd download_hub
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
 
-Current baseline: 347 passed, 1 skipped. Every code change must maintain or improve this. The branding guard test ensures no external URLs leak into committed templates/CSS/JS.
+Current baseline: 358 passed, 1 skipped. Every code change must maintain or improve this. The branding guard test ensures no external URLs leak into committed templates/CSS/JS.
 
 ## Gotchas
 

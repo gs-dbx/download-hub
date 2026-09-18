@@ -41,6 +41,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -76,6 +77,19 @@ from config import (
     downloads_enabled,
     resolve_chrome_text,
     resolve_disclaimer,
+)
+from diagnostics import (
+    REPORTED_PACKAGES,
+    boot_banner,
+    check_from_exc,
+    env_report,
+    exc_summary,
+    format_traceback,
+    make_check,
+    missing_required,
+    package_versions,
+    runtime_info,
+    summarize,
 )
 from errors import ReportDataError, friendly_error
 from exports import (
@@ -186,7 +200,18 @@ _EXPORT_VOLUME = (os.environ.get("APP_EXPORT_VOLUME") or "").strip()
 _EXPORT_PAGE_ROWS = _int_env("EXPORT_PAGE_ROWS", 10_000)
 
 app = FastAPI(title=_APP_NAME)
-app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+# Boot-time errors are collected here rather than raised, so the app can still
+# start and EXPLAIN what went wrong on /_diag instead of dying with a bare
+# "Internal Server Error" (some deploy targets surface no app logs — see
+# diagnostics.py). StaticFiles() raises at construction if its directory is
+# missing (a real "source didn't sync" failure), so guard the mount.
+_BOOT_ERRORS: list[str] = []
+try:
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+except Exception as exc:  # noqa: BLE001 - keep booting so /_diag can report it
+    _BOOT_ERRORS.append(f"static mount failed ({_STATIC_DIR}): {exc_summary(exc)}")
+    print(f"[download-hub] BOOT ERROR: {_BOOT_ERRORS[-1]}")
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Asset cache-buster: a short content hash of the authored CSS/JS computed at
 # startup and appended as ?v=... to those /static assets. Because it is derived
@@ -1160,14 +1185,215 @@ def _volume_crumbs(volume_root: str, subpath: str) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Diagnostics (L8): make a failed deploy EXPLAIN itself, even where app logs are
+# unavailable. A global exception handler renders the real error (type, message,
+# traceback) instead of a bare "Internal Server Error"; /_diag + /health/diag run
+# a self-check battery (env, SP identity, warehouse, config table, export volume)
+# where each probe is independently caught so one failure never hides the rest.
+# ---------------------------------------------------------------------------
+
+# Env vars that MUST be set for the app to serve any data.
+_REQUIRED_ENV: tuple[str, ...] = (
+    "DATABRICKS_HOST",
+    "DATABRICKS_WAREHOUSE_ID",
+    "APP_CATALOG",
+    "APP_SCHEMA",
+)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> Response:
+    """Turn any unhandled error into a readable page instead of a bare 500.
+
+    Prints the full traceback to stdout (for targets that DO surface logs) and
+    renders it into ``error.html`` (for targets that do not). Per the app's
+    verbose-diagnostics choice the exception type, message, and traceback are
+    always shown. ``HTTPException`` is handled by FastAPI's own handler — this
+    catches only genuinely unhandled (500-class) errors.
+    """
+    tb = format_traceback(exc)
+    print(f"[download-hub] UNHANDLED {request.method} {request.url.path}\n{tb}")
+    try:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": friendly_error(str(exc)),
+                "error_type": type(exc).__name__,
+                "error_detail": " ".join(str(exc).split()) or "(no message)",
+                "error_path": f"{request.method} {request.url.path}",
+                "traceback": tb,
+            },
+            status_code=500,
+        )
+    except Exception as render_exc:  # noqa: BLE001 - template failed too; last resort
+        body = (
+            f"{exc_summary(exc)}\n\n{tb}\n\n"
+            f"(the error page itself failed to render: {exc_summary(render_exc)})"
+        )
+        return PlainTextResponse(body, status_code=500)
+
+
+async def _run_diagnostics(*, include_sql: bool = True) -> dict:
+    """Run the live self-check battery; every probe is independently caught.
+
+    Args:
+        include_sql: Run the checks that issue SQL (config-table read, export
+            volume list). Skipped for the startup banner because a query can
+            cold-start the warehouse — the on-demand endpoints run the full set.
+
+    Returns:
+        A structured report: ``version``, ``summary`` (rollup), ``checks``,
+        ``runtime``, ``packages``, ``env`` (secrets masked), ``boot_errors``.
+    """
+    checks: list[dict] = []
+
+    # 1) Import-time boot errors (e.g. the static dir did not sync).
+    if _BOOT_ERRORS:
+        for err in _BOOT_ERRORS:
+            checks.append(make_check("boot", False, err))
+    else:
+        checks.append(make_check("boot", True, "no boot errors"))
+
+    # 2) Packaged assets present.
+    checks.append(make_check("static_dir", _STATIC_DIR.is_dir(), str(_STATIC_DIR)))
+    checks.append(make_check("templates_dir", _TEMPLATES_DIR.is_dir(), str(_TEMPLATES_DIR)))
+
+    # 3) Required configuration present.
+    missing = missing_required(dict(os.environ), _REQUIRED_ENV)
+    checks.append(
+        make_check(
+            "required_env",
+            not missing,
+            "all set" if not missing else "missing/empty: " + ", ".join(missing),
+        )
+    )
+
+    # 4) App service-principal identity (cheap; no warehouse cold-start).
+    sp = None
+    try:
+        sp = _app_sp_client()
+        me = await asyncio.to_thread(lambda: sp.current_user.me())
+        who = getattr(me, "user_name", None) or getattr(me, "id", None) or "unknown"
+        checks.append(make_check("app_sp_identity", True, f"authenticated as {who}"))
+    except Exception as exc:  # noqa: BLE001 - report, never raise
+        checks.append(make_check("app_sp_identity", False, exc_summary(exc)))
+
+    # 5) Warehouse reachability + state (cheap metadata read, no query).
+    wid = (os.environ.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
+    if not wid:
+        checks.append(make_check("warehouse", False, "DATABRICKS_WAREHOUSE_ID unset"))
+    elif sp is None:
+        checks.append(make_check("warehouse", False, "no service-principal client"))
+    else:
+        try:
+            wh = await asyncio.to_thread(sp.warehouses.get, wid)
+            state = str(getattr(wh.state, "value", wh.state) or "UNKNOWN")
+            checks.append(make_check("warehouse", True, f"{wid}: {state}"))
+        except Exception as exc:  # noqa: BLE001
+            checks.append(make_check("warehouse", False, exc_summary(exc)))
+
+    # 6) Config registry read AS THE SP. Issues SQL (can cold-start the
+    #    warehouse), so it runs only on demand, not in the startup banner.
+    if include_sql:
+        try:
+            cat, sch = _env("APP_CATALOG"), _env("APP_SCHEMA")
+            _cols, rows = await _exec(
+                _app_sp_client(), build_report_config_query(cat, sch)
+            )
+            checks.append(
+                make_check(
+                    "config_table",
+                    True,
+                    f"{cat}.{sch}.report_config readable ({len(rows)} row(s))",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - ReportDataError text is friendly
+            checks.append(make_check("config_table", False, exc_summary(exc)))
+    else:
+        checks.append(
+            make_check(
+                "config_table",
+                True,
+                "skipped at startup (avoids warehouse cold-start)",
+                warn=True,
+            )
+        )
+
+    # 7) Export volume for large-CSV delivery. A WARN, never a hard fail —
+    #    direct downloads still work without it.
+    if not _EXPORT_VOLUME:
+        checks.append(
+            make_check(
+                "export_volume",
+                False,
+                "APP_EXPORT_VOLUME unset (large exports return 413)",
+                warn=True,
+            )
+        )
+    elif include_sql:
+        try:
+            await asyncio.to_thread(_vol_list_dir, _app_sp_client(), _EXPORT_VOLUME, "")
+            checks.append(make_check("export_volume", True, f"{_EXPORT_VOLUME} accessible"))
+        except Exception as exc:  # noqa: BLE001
+            checks.append(make_check("export_volume", False, exc_summary(exc), warn=True))
+    else:
+        checks.append(make_check("export_volume", True, f"{_EXPORT_VOLUME} (set)"))
+
+    summary = summarize(checks)
+    return {
+        "version": os.environ.get("APP_VERSION", "0.0.0"),
+        "summary": summary,
+        "checks": checks,
+        "runtime": runtime_info(),
+        "packages": package_versions(REPORTED_PACKAGES),
+        "env": env_report(dict(os.environ)),
+        "boot_errors": list(_BOOT_ERRORS),
+    }
+
+
+@app.on_event("startup")
+async def _startup_diagnostics() -> None:
+    """Run the light self-check at boot and print a banner to stdout.
+
+    Best-effort: never breaks startup. In targets that DO surface logs this makes
+    a misconfiguration obvious immediately; in targets that do not, the same data
+    is on ``/_diag``.
+    """
+    try:
+        diag = await _run_diagnostics(include_sql=False)
+        print(boot_banner(diag["summary"], diag["checks"], diag["version"]))
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break startup
+        print(f"[download-hub] startup diagnostics failed: {exc_summary(exc)}")
+
+
 @app.get("/health")
 async def health() -> dict:
     """Lightweight liveness probe (no auth).
 
     Returns:
-        A small status dict.
+        A small status dict including the served version and whether the app
+        booted without errors (see ``/health/diag`` for the full self-check).
     """
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "version": os.environ.get("APP_VERSION", "0.0.0"),
+        "boot_ok": not _BOOT_ERRORS,
+    }
+
+
+@app.get("/health/diag")
+async def health_diag() -> dict:
+    """Full self-check as JSON (no auth): env, SP identity, warehouse, config, volume."""
+    return await _run_diagnostics(include_sql=True)
+
+
+@app.get("/_diag", response_class=HTMLResponse)
+async def diag_page(request: Request) -> Response:
+    """Human-readable diagnostics page (no auth) — safe to open on a broken deploy."""
+    diag = await _run_diagnostics(include_sql=True)
+    return templates.TemplateResponse(request, "diag.html", {"diag": diag})
 
 
 @app.get("/health/warehouse")

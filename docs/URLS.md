@@ -179,12 +179,17 @@ The `/admin/view*` route names and `view_key` form field are retained for
 backward compatibility. Product terminology calls these resource collections
 and collection keys.
 
-## Health endpoints
+## Health & diagnostics endpoints
+
+All are unauthenticated so they remain reachable when auth/OBO is itself broken.
+See [DEPLOY.md](DEPLOY.md) → *Debugging a failed deploy*.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | Lightweight process health response. |
+| `GET` | `/health` | Lightweight process health; includes `version` and `boot_ok`. |
 | `GET` | `/health/warehouse` | JSON warehouse status used by the UI badge. |
+| `GET` | `/health/diag` | Full self-check as JSON: boot, static/templates dirs, required env, app SP identity, warehouse state, config-table read, export volume, runtime, and package versions. Secret env values are masked. |
+| `GET` | `/_diag` | The same self-check as a human-readable page. |
 
 ## Static assets
 

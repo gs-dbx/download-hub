@@ -134,6 +134,7 @@ justification control for files.
 | Download audit failed | Contact the operator; the app correctly withheld the file. |
 | Warehouse starting | Wait for the cold start, then retry. |
 | Large export fails | Operator checks `APP_EXPORT_VOLUME`, app-SP grants, capacity, and cleanup. |
+| Whole app shows "Internal Server Error" after a deploy | Open **`/_diag`** (or `GET /health/diag` for JSON) — an unauthenticated self-check that reports boot errors, missing config, SP identity, warehouse state, config-table access, and the export volume. See [DEPLOY.md](DEPLOY.md) → *Debugging a failed deploy*. |
 
 Never solve a source-access issue by granting users the private export volume.
 

@@ -662,18 +662,24 @@ def build_distinct_values_query(
     field: str,
     date_field: str | None = None,
     report_date: str | None = None,
+    limit: int | None = None,
 ) -> tuple[str, list[dict]]:
     """Build the SQL for DISTINCT values of a filter field, optionally date-scoped.
 
     Feeds a filter dropdown. If both ``date_field`` and ``report_date`` are
     given, adds ``WHERE <date_field> = :report_date`` (the date VALUE is bound,
-    never interpolated).
+    never interpolated). A positive ``limit`` bounds the scan with a trailing
+    ``LIMIT`` so a filter over a very large source cannot trigger an unbounded
+    full-table DISTINCT on every page load (the dropdown then shows the first
+    ``limit`` distinct values in sort order).
 
     Args:
         source_query: The report's full SELECT (wrapped as a subquery).
         field: The filter column to list distinct values of.
         date_field: Optional date column to scope by.
         report_date: Optional bound date VALUE (used only with ``date_field``).
+        limit: Optional positive cap on the number of distinct values returned;
+            ``None`` or non-positive means no cap.
 
     Returns:
         A tuple ``(sql, params)`` where ``params`` is empty unless date-scoped.
@@ -692,6 +698,10 @@ def build_distinct_values_query(
             {"name": "report_date", "value": report_date, "type": "TIMESTAMP"}
         )
     sql += f" ORDER BY {fld}"
+    # A validated positive int interpolated directly (LIMIT does not accept a
+    # bound parameter in the Statement Execution API); never user-controlled text.
+    if limit is not None and int(limit) > 0:
+        sql += f" LIMIT {int(limit)}"
     return sql, params
 
 

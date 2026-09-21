@@ -776,3 +776,23 @@ select,
 }
 .app-row-actions .app-inline-form { margin: 0; display: inline-flex; }
 .app-row-actions .usa-button { margin: 0; white-space: nowrap; }
+
+/* ---- My downloads: async export job status badges ------------------------
+   Small inline pill per job. Colors reuse the shared tokens so they read the
+   same in the table as the +/- change indicators; JS swaps the modifier class
+   as a job transitions (queued -> running -> ready/failed/expired). */
+.app-jobstatus {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background-color: #eef2f8;
+  color: var(--app-blue);
+}
+.app-jobstatus--ready { background-color: #ecf3ec; color: var(--app-pos); }
+.app-jobstatus--failed,
+.app-jobstatus--expired { background-color: #f8eeee; color: var(--app-neg); }
+.app-jobstatus--queued,
+.app-jobstatus--running { background-color: #eef2f8; color: var(--app-blue); }

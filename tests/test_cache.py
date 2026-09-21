@@ -8,13 +8,17 @@ import time
 
 from app.cache import (
     BoundedTTLCache,
+    BoundedTTLObjectCache,
     Snapshot,
     SnapshotCache,
     apply_filters,
     apply_search,
     distinct_values,
+    filter_options_key,
     make_key,
     paginate,
+    report_cache_prefix,
+    session_cache_key,
     sort_rows,
 )
 
@@ -34,6 +38,81 @@ def test_make_key_is_tuple():
         "r1",
         "2026-01-12 00:00:00",
     )
+
+
+# --- BoundedTTLObjectCache + session key helpers -------------------------
+
+
+def test_object_cache_get_put_roundtrip_any_value():
+    """The object cache stores and returns an arbitrary (non-string) value."""
+    c = BoundedTTLObjectCache(max_size=4)
+    payload = (["a", "b"], [{"a": 1}], 42)  # (columns, rows, total)-like tuple
+    c.put("k", payload)
+    assert c.get("k") == payload
+    assert c.get("missing") is None
+
+
+def test_object_cache_lru_eviction():
+    """Beyond max_size the least-recently-used entry is evicted."""
+    c = BoundedTTLObjectCache(max_size=2)
+    c.put("a", 1)
+    c.put("b", 2)
+    c.get("a")  # touch a -> b becomes LRU
+    c.put("c", 3)  # evicts b
+    assert c.get("a") == 1
+    assert c.get("c") == 3
+    assert c.get("b") is None
+
+
+def test_object_cache_ttl_expiry():
+    """An entry older than the TTL is a miss and is dropped."""
+    c = BoundedTTLObjectCache(max_size=4, ttl_seconds=0.05)
+    c.put("k", 1)
+    assert c.get("k") == 1
+    time.sleep(0.06)
+    assert c.get("k") is None
+    assert len(c) == 0
+
+
+def test_object_cache_evict_prefix():
+    """evict_prefix drops exactly the matching keys and returns the count."""
+    c = BoundedTTLObjectCache(max_size=8)
+    pfx = report_cache_prefix("u@x", "r1")
+    c.put(pfx + "page\x1f1", "p1")
+    c.put(pfx + "fopts", "opts")
+    c.put(report_cache_prefix("u@x", "r2") + "fopts", "other")
+    removed = c.evict_prefix(pfx)
+    assert removed == 2
+    assert c.get(report_cache_prefix("u@x", "r2") + "fopts") == "other"
+
+
+def test_session_cache_key_order_independent_over_filters():
+    """The key is stable regardless of filter insertion order."""
+    k1 = session_cache_key("u@x", "r1", {"a": "1", "b": "2"}, "q", "col", "asc", 1, 25)
+    k2 = session_cache_key("u@x", "r1", {"b": "2", "a": "1"}, "q", "col", "asc", 1, 25)
+    assert k1 == k2
+
+
+def test_session_cache_key_varies_on_selection():
+    """Different page/filters/search/sort produce different keys."""
+    base = session_cache_key("u@x", "r1", {"a": "1"}, "", "", "asc", 1, 25)
+    assert base != session_cache_key("u@x", "r1", {"a": "2"}, "", "", "asc", 1, 25)
+    assert base != session_cache_key("u@x", "r1", {"a": "1"}, "x", "", "asc", 1, 25)
+    assert base != session_cache_key("u@x", "r1", {"a": "1"}, "", "", "asc", 2, 25)
+    assert base != session_cache_key("u@x", "r1", {"a": "1"}, "", "", "asc", 1, 50)
+
+
+def test_session_cache_key_scoped_per_user_and_report():
+    """A different user or report yields a different key (no cross-user leak)."""
+    a = session_cache_key("u@x", "r1", {}, "", "", "asc", 1, 25)
+    assert a != session_cache_key("v@x", "r1", {}, "", "", "asc", 1, 25)
+    assert a != session_cache_key("u@x", "r2", {}, "", "", "asc", 1, 25)
+    assert a.startswith(report_cache_prefix("u@x", "r1"))
+
+
+def test_filter_options_key_shares_prefix():
+    """The filter-options key shares the (user, report) prefix for eviction."""
+    assert filter_options_key("u@x", "r1").startswith(report_cache_prefix("u@x", "r1"))
 
 
 # --- SnapshotCache LRU / MRU / TTL ---------------------------------------

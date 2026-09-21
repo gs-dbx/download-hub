@@ -68,6 +68,13 @@ GRANT SELECT ON TABLE main.default.download_audit TO `<APP_SERVICE_PRINCIPAL_CLI
 GRANT MODIFY ON TABLE main.default.config_audit   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 GRANT SELECT ON TABLE main.default.config_audit   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 
+-- Async export jobs: the app inserts a row per queued download and UPDATEs its
+-- status (queued -> running -> ready/failed) as the SP; the cleanup job marks
+-- old rows expired. MODIFY covers INSERT/UPDATE; SELECT drives the My downloads
+-- page + retrieve + restart reconciliation.
+GRANT MODIFY ON TABLE main.default.export_jobs TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+GRANT SELECT ON TABLE main.default.export_jobs TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
+
 -- Registry tables: read (report/view/config load) + write (admin console upserts).
 GRANT SELECT ON TABLE main.default.report_config TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 GRANT MODIFY ON TABLE main.default.report_config TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;

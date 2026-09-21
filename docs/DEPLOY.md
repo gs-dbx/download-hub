@@ -52,13 +52,28 @@ This syncs `src/app/` to the workspace and creates/updates the `download-hub` ap
 
 ## 3. Create the data tables and seed sample data
 
-The `metrics_seed` job creates the `report_config` and `download_audit` tables and populates `daily_metrics` with sample data:
+The `metrics_seed` job creates the `report_config`, `download_audit`, `config_audit`, and `export_jobs` tables and populates `daily_metrics` with sample data:
 
 ```bash
 databricks bundle run metrics_seed --target dev
 ```
 
 This runs the seed notebook once. The notebook is idempotent (uses `CREATE TABLE IF NOT EXISTS` and table overwrites), so rerunning is safe.
+
+### Exports retention cleanup job
+
+The bundle also defines `exports_cleanup` (hourly, `resources/cleanup_job.yml`),
+which prunes generated export files older than 24h from `APP_EXPORT_VOLUME` and
+marks the corresponding `export_jobs` rows `expired`. It's scheduled
+automatically on deploy; run it on demand with:
+
+```bash
+databricks bundle run exports_cleanup --target dev
+```
+
+Its `export_volume` parameter defaults to
+`/Volumes/${var.catalog}/${var.schema}/download_exports` — override it in
+`resources/cleanup_job.yml` if your `APP_EXPORT_VOLUME` differs.
 
 ## 4. Start / restart the app
 
@@ -213,14 +228,14 @@ env:
     value: "/Volumes/<catalog>/<schema>/<volume>"
 ```
 
-For large-result delivery, create that volume first and grant only the app
-service principal `READ VOLUME` and `WRITE VOLUME`, plus catalog/schema usage.
-Do not grant end-user download groups direct volume access; the app performs
-ownership and authorization checks before proxying retrieval. Verify upload and
-retrieval while signed in as a member of each group. Configure a scheduled
-retention policy or cleanup job for the export
-volume; each successful large export uses a unique audit-ID directory so it is
-never silently overwritten.
+All downloads are generated to this volume, so it is **required** (without it
+`POST /download` returns 503). Create it first and grant only the app service
+principal `READ VOLUME` and `WRITE VOLUME`, plus catalog/schema usage. Do not
+grant end-user download groups direct volume access; the app performs ownership
+and authorization checks before proxying retrieval. Verify upload and retrieval
+while signed in as a member of each group. Retention is handled by the
+`exports_cleanup` scheduled job (section 3, 24h TTL); each export uses a unique
+`{email_slug}/{job_id}/` directory so it is user-scoped and never overwritten.
 
 Then redeploy and restart:
 

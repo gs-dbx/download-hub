@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}My downloads{% endblock %}
+
+{% block content %}
+{#
+  My downloads (async export jobs). All report downloads are queued: POST
+  /download enqueues a job, the file is generated in the background to the
+  exports volume, and it appears here with a Download link once ready. app.js
+  (downloads-table controller) polls /downloads/status and live-updates each
+  row's status + action while any job is still queued/running. Every link is a
+  local /… path (air-gap safe). Files are pruned automatically after 24h.
+#}
+<div class="app-report">
+  <div class="app-hero">
+    <h1 class="font-heading-xl app-hero__title">My downloads</h1>
+    <p class="usa-intro font-body-sm app-hero__sub">
+      Exports you've requested. Large exports are prepared in the background and
+      appear here when ready. Files are removed automatically after 24 hours.
+    </p>
+  </div>
+
+  {% if not jobs %}
+  <div class="usa-alert usa-alert--info usa-alert--slim margin-top-2">
+    <div class="usa-alert__body">
+      <p class="usa-alert__text">
+        You haven't requested any downloads yet. Open a report and choose
+        &ldquo;Download data.&rdquo;
+      </p>
+    </div>
+  </div>
+  {% else %}
+  <div class="app-table-wrap">
+    <table class="usa-table usa-table--striped usa-table--borderless width-full"
+           data-role="downloads-table">
+      <caption class="usa-sr-only">My downloads</caption>
+      <thead>
+        <tr>
+          <th scope="col">Report</th>
+          <th scope="col">Format</th>
+          <th scope="col" class="text-right">Rows</th>
+          <th scope="col">Requested</th>
+          <th scope="col">Status</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr data-job-id="{{ job.job_id }}" data-status="{{ job.status }}">
+          <td>{{ job.report_title or job.report_id }}</td>
+          <td>{{ job.export_format | upper }}</td>
+          <td class="text-right">{{ "{:,}".format(job.row_count) }}</td>
+          <td>{{ job.created_display }}</td>
+          <td>
+            <span class="app-jobstatus app-jobstatus--{{ job.status }}"
+                  data-role="job-status">{{ job.status_label }}</span>
+          </td>
+          <td data-role="job-action">
+            {% if job.is_ready %}
+            <a class="usa-button usa-button--outline" href="{{ job.retrieve_href }}">
+              <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+                <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+              </svg>
+              Download
+            </a>
+            {% elif job.status == 'failed' or job.status == 'expired' %}
+            {{ job.message }}
+            {% else %}
+            &hellip;
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <p class="margin-top-2">
+    <a class="usa-link" href="/">&larr; Back to reports</a>
+  </p>
+</div>
+{% endblock %}
+
+{% block footer_extra %}App version {{ app_version }}.{% endblock %}

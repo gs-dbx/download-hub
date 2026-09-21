@@ -329,9 +329,10 @@
   var dlError = byRole("download-error");
   var dlErrorText = byRole("download-error-text");
 
-  var dlReady = byRole("download-ready");
-  var dlReadyText = byRole("download-ready-text");
+  var dlStatus = byRole("download-status");
+  var dlStatusText = byRole("download-status-text");
   var dlReadyLink = byRole("download-ready-link");
+  var dlPollTimer = null;
 
   // Keep the button's loading state on-screen for a minimum time so a fast/small
   // export still shows perceptible feedback (mirrors the table spinner's
@@ -346,40 +347,62 @@
   function clearDownloadError() {
     if (dlError) dlError.hidden = true;
     if (dlErrorText) dlErrorText.textContent = "";
-    if (dlReady) dlReady.hidden = true;
-  }
-
-  // Over-cap export was saved to the volume — reveal the "ready" panel with a
-  // link to GET /download/retrieve (a normal attachment link, not a blob).
-  function showDownloadReady(info) {
-    if (dlReadyText) dlReadyText.textContent = info.message || "Your export is ready.";
-    if (dlReadyLink) {
-      dlReadyLink.href =
-        "/download/retrieve?path=" + encodeURIComponent(info.retrieve_path || "");
-      if (info.filename) dlReadyLink.setAttribute("download", info.filename);
+    if (dlStatus) dlStatus.hidden = true;
+    if (dlReadyLink) dlReadyLink.hidden = true;
+    if (dlPollTimer) {
+      clearTimeout(dlPollTimer);
+      dlPollTimer = null;
     }
-    if (dlReady) dlReady.hidden = false;
   }
 
-  // Pull the filename the server set in Content-Disposition (fallback given).
-  function filenameFromDisposition(header, fallback) {
-    if (!header) return fallback;
-    var m = /filename="?([^"]+)"?/.exec(header);
-    return m ? m[1] : fallback;
+  // Reveal the async status panel with a message (Download button stays hidden
+  // until the job is ready).
+  function showDownloadStatus(msg) {
+    if (dlStatusText)
+      dlStatusText.textContent = msg || "Your download is being prepared…";
+    if (dlReadyLink) dlReadyLink.hidden = true;
+    if (dlStatus) dlStatus.hidden = false;
   }
 
-  function triggerBlobDownload(blob, filename) {
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    // Revoke on the next tick so the download has started.
-    setTimeout(function () {
-      URL.revokeObjectURL(url);
-    }, 1000);
+  // Poll /downloads/status until THIS job is ready or failed. On ready, reveal
+  // the Download button — a normal attachment link to /download/retrieve?job_id
+  // (not a blob), so the browser saves the file the app SP generated.
+  function pollJob(jobId) {
+    if (!jobId) return;
+    fetch("/downloads/status", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var jobs = (d && d.jobs) || [];
+        var job = null;
+        for (var i = 0; i < jobs.length; i++) {
+          if (jobs[i].job_id === jobId) { job = jobs[i]; break; }
+        }
+        if (job && job.is_ready) {
+          if (dlStatusText) dlStatusText.textContent = "Your download is ready.";
+          if (dlReadyLink) {
+            dlReadyLink.href =
+              job.retrieve_href ||
+              "/download/retrieve?job_id=" + encodeURIComponent(jobId);
+            dlReadyLink.hidden = false;
+          }
+          return; // done — stop polling
+        }
+        if (job && (job.status === "failed" || job.status === "expired")) {
+          showDownloadError(
+            job.message ||
+              "The download could not be prepared. Please try again."
+          );
+          if (dlStatus) dlStatus.hidden = true;
+          return; // terminal — stop polling
+        }
+        // Still queued/running (or not visible yet) — keep polling.
+        if (job && dlStatusText)
+          dlStatusText.textContent = (job.status_label || "Preparing") + "…";
+        dlPollTimer = setTimeout(function () { pollJob(jobId); }, 3000);
+      })
+      .catch(function () {
+        dlPollTimer = setTimeout(function () { pollJob(jobId); }, 4000);
+      });
   }
 
   // Parse an error body: FastAPI HTTPException -> {"detail": "..."}.
@@ -424,30 +447,27 @@
           showDownloadError(await errorMessageFromResponse(resp));
           return;
         }
-        // Over-cap exports return JSON (saved to the volume), not a file blob —
-        // show the "ready" panel with a retrieve link and keep the modal open.
-        var ctype = resp.headers.get("Content-Type") || "";
-        if (ctype.indexOf("application/json") !== -1) {
-          var info = await resp.json();
-          if (info && info.spilled) {
-            showDownloadReady(info);
-            return;
-          }
+        // All downloads are queued: the server returns JSON pointing at the job.
+        // Reveal the status panel and poll until the file is ready (or failed),
+        // keeping the modal open so a fast/small export gets an inline Download
+        // button without navigating away.
+        var info = {};
+        try {
+          info = await resp.json();
+        } catch (e) {
+          info = {};
         }
-        var blob = await resp.blob();
-        var filename = filenameFromDisposition(
-          resp.headers.get("Content-Disposition"),
-          reportId + "_export"
-        );
-        triggerBlobDownload(blob, filename);
-        // Success — close the modal (click any close control).
-        var closer = document.querySelector(
-          "#download-modal [data-close-modal]"
-        );
-        if (closer) closer.click();
+        if (info && info.queued) {
+          showDownloadStatus(info.message);
+          pollJob(info.job_id);
+        } else {
+          showDownloadError(
+            "Unexpected response from the server. Check the My downloads page."
+          );
+        }
       } catch (err) {
         showDownloadError(
-          "Could not reach the server to build the download. Check your " +
+          "Could not reach the server to queue the download. Check your " +
             "connection and try again."
         );
       } finally {
@@ -857,4 +877,79 @@
       loadFolder(p.get("path"));
     }
   })();
+})();
+
+// ===========================================================================
+// My downloads page — poll /downloads/status and live-update each job row while
+// any job is still queued/running. Self-contained; no-ops when its table is
+// absent. Server renders the initial rows; this only patches status + action.
+// ===========================================================================
+(function () {
+  "use strict";
+
+  var table = document.querySelector('[data-role="downloads-table"]');
+  if (!table) return;
+  var timer = null;
+
+  function rowFor(jobId) {
+    var rows = table.querySelectorAll("[data-job-id]");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute("data-job-id") === jobId) return rows[i];
+    }
+    return null;
+  }
+
+  function applyJob(job) {
+    var row = rowFor(job.job_id);
+    if (!row) return;
+    row.setAttribute("data-status", job.status);
+    var statusCell = row.querySelector('[data-role="job-status"]');
+    if (statusCell) {
+      statusCell.textContent = job.status_label || job.status;
+      statusCell.className = "app-jobstatus app-jobstatus--" + job.status;
+    }
+    var actionCell = row.querySelector('[data-role="job-action"]');
+    if (!actionCell) return;
+    if (job.is_ready) {
+      var href =
+        job.retrieve_href ||
+        "/download/retrieve?job_id=" + encodeURIComponent(job.job_id);
+      // Only inject the button once (avoid clobbering a click in progress).
+      if (!actionCell.querySelector("a")) {
+        var a = document.createElement("a");
+        a.className = "usa-button usa-button--outline";
+        a.href = href;
+        a.textContent = "Download";
+        actionCell.innerHTML = "";
+        actionCell.appendChild(a);
+      }
+    } else if (job.status === "failed" || job.status === "expired") {
+      actionCell.textContent = job.message || "";
+    }
+  }
+
+  function poll() {
+    fetch("/downloads/status", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var jobs = (d && d.jobs) || [];
+        var anyActive = false;
+        jobs.forEach(function (job) {
+          applyJob(job);
+          if (job.is_active) anyActive = true;
+        });
+        if (anyActive) timer = setTimeout(poll, 4000);
+      })
+      .catch(function () {
+        timer = setTimeout(poll, 6000);
+      });
+  }
+
+  // Only start polling if something on the page is still being prepared.
+  if (
+    table.querySelector('[data-status="queued"]') ||
+    table.querySelector('[data-status="running"]')
+  ) {
+    poll();
+  }
 })();

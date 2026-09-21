@@ -237,6 +237,39 @@ def can_admin_any(
     return any(is_collection_admin(me_user, v) for v in (views or ()))
 
 
+def can_download_group(
+    me_user: Any,
+    report: "ReportConfig",
+    suffix: str = DEFAULT_DOWNLOAD_SUFFIX,
+    system_admin_group: str = SYSTEM_ADMIN_GROUP,
+) -> bool:
+    """Return whether the user may DOWNLOAD a report, group-wise.
+
+    A system administrator may ALWAYS download, regardless of the report's
+    download group (they administer every collection, so withholding the export
+    entitlement from them is never intended). Everyone else must belong to the
+    report's effective download group.
+
+    This is the group-membership decision only; the global download kill switch
+    (``config.downloads_enabled``) is layered on top by the caller in ``main.py``
+    and applies to system admins too. Pure name-match helper (unit-testable
+    offline); the ``me()`` I/O lives in ``main.py``.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        report: The active report config.
+        suffix: The download-group suffix (env-configurable).
+        system_admin_group: The system-admin group display name (env-configurable).
+
+    Returns:
+        ``True`` if the user is a system admin OR a member of the report's
+        effective download group; ``False`` otherwise.
+    """
+    return is_system_admin(me_user, system_admin_group) or is_member(
+        me_user, effective_download_group(report, suffix)
+    )
+
+
 def _get_case_insensitive(headers: Any, key: str) -> str | None:
     """Look up ``key`` in a headers-like object, case-insensitively.
 

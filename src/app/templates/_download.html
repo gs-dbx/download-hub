@@ -67,21 +67,26 @@
         </div>
 
         {#
-          Large-export "ready" panel: when the export exceeds the direct-download
-          cap the server saves it to the exports volume and returns JSON instead
-          of a file; app.js reveals this with a link to GET /download/retrieve.
+          Async status panel. All downloads are queued: on submit app.js reveals
+          this with "being prepared", polls the job, then reveals the Download
+          button (a link to GET /download/retrieve?job_id=…) when it's ready. The
+          "My downloads" link always lets the user leave and track it there.
         #}
-        <div class="usa-alert usa-alert--success margin-top-2"
-             data-role="download-ready" role="status" hidden>
+        <div class="usa-alert usa-alert--info margin-top-2"
+             data-role="download-status" role="status" hidden>
           <div class="usa-alert__body">
-            <p class="usa-alert__text" data-role="download-ready-text"></p>
+            <p class="usa-alert__text" data-role="download-status-text">
+              Your download is being prepared…
+            </p>
             <a class="usa-button margin-top-1" data-role="download-ready-link"
-               href="#">
+               href="#" hidden>
               <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
                 <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
               </svg>
-              Download the saved file
+              Download
             </a>
+            <a class="usa-link margin-top-1 display-inline-block margin-left-2"
+               href="/downloads" data-role="download-downloads-link">Go to My downloads</a>
           </div>
         </div>
 

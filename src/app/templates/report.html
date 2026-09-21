@@ -51,10 +51,11 @@
       <div class="app-field app-field--size">
         <label class="usa-label" for="report-size">Rows</label>
         <select class="usa-select" id="report-size" data-role="report-size">
+          <option value="10"{% if size == 10 %} selected{% endif %}>10</option>
           <option value="25"{% if size == 25 %} selected{% endif %}>25</option>
-          <option value="50"{% if size == 50 %} selected{% endif %}>50</option>
           <option value="100"{% if size == 100 %} selected{% endif %}>100</option>
-          <option value="all">All</option>
+          <option value="500"{% if size == 500 %} selected{% endif %}>500</option>
+          <option value="1000"{% if size == 1000 %} selected{% endif %}>1000</option>
         </select>
       </div>
       <div class="app-field app-field--refresh">

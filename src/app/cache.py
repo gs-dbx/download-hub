@@ -13,12 +13,19 @@ holds a user's own OBO-authorized rows — there is no cross-user leak.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 Key = tuple[str, str, str]  # (user_email, report_id, selected_date)
+
+# Delimiter used to build structured session-cache keys. Unit Separator (0x1f) is
+# a control char that never appears in an email, report id, or filter value, so a
+# key can be safely split/prefix-matched on it (see :func:`report_cache_prefix`).
+_KEY_SEP = "\x1f"
 
 
 @dataclass
@@ -171,6 +178,170 @@ class BoundedTTLCache:
     def __len__(self) -> int:
         """Return the number of cached entries."""
         return len(self._store)
+
+
+class BoundedTTLObjectCache:
+    """A bounded, TTL-expiring ``str`` → arbitrary-value cache with LRU eviction.
+
+    Generalizes :class:`BoundedTTLCache` (which stores only strings) so the app
+    can cache per-session query results — a report's filter-option lists and its
+    ``(COUNT, page-rows)`` tuples — keyed by an opaque string. Keyed by a string
+    that INCLUDES the user's email (see :func:`session_cache_key` /
+    :func:`filter_options_key`), so an entry only ever holds that user's own
+    OBO-authorized data — no cross-user leak (the same guarantee the per-user
+    :class:`SnapshotCache` gave). ``get`` marks the entry most-recently-used and
+    drops it if TTL-expired; ``put`` evicts the LRU entry beyond ``max_size``;
+    ``evict`` / ``evict_prefix`` remove entries (used by the Refresh button).
+    Stdlib-only, so it is unit-testable offline.
+    """
+
+    def __init__(self, max_size: int = 256, ttl_seconds: float | None = None) -> None:
+        """Initialize the cache.
+
+        Args:
+            max_size: Maximum number of entries retained (LRU beyond this).
+            ttl_seconds: Optional time-to-live; an entry older than this is a miss
+                and is dropped on ``get``. ``None`` disables TTL.
+        """
+        self._store: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
+        self._max_size = max_size
+        self._ttl = ttl_seconds
+
+    def get(self, key: str) -> Any | None:
+        """Return the fresh value for ``key`` (marking it MRU), or ``None``.
+
+        Args:
+            key: The lookup key.
+
+        Returns:
+            The stored value, or ``None`` on a miss or TTL expiry.
+        """
+        hit = self._store.get(key)
+        if hit is None:
+            return None
+        ts, value = hit
+        if self._ttl is not None and (time.time() - ts) > self._ttl:
+            del self._store[key]  # expired -> treat as a miss
+            return None
+        self._store.move_to_end(key)  # mark most-recently-used
+        return value
+
+    def put(self, key: str, value: Any) -> None:
+        """Store ``value`` under ``key`` (MRU), evicting LRU beyond ``max_size``.
+
+        Args:
+            key: The lookup key.
+            value: The value to cache (any object).
+        """
+        self._store[key] = (time.time(), value)
+        self._store.move_to_end(key)
+        while len(self._store) > self._max_size:
+            self._store.popitem(last=False)  # evict least-recently-used
+
+    def evict(self, key: str) -> None:
+        """Remove ``key`` from the cache if present (a no-op if absent).
+
+        Args:
+            key: The key to drop.
+        """
+        self._store.pop(key, None)
+
+    def evict_prefix(self, prefix: str) -> int:
+        """Remove every entry whose key starts with ``prefix``; return the count.
+
+        Used by the Refresh action to drop all cached results for one
+        ``(user, report)`` at once (see :func:`report_cache_prefix`).
+
+        Args:
+            prefix: The key prefix to match.
+
+        Returns:
+            The number of entries removed.
+        """
+        doomed = [k for k in self._store if k.startswith(prefix)]
+        for k in doomed:
+            del self._store[k]
+        return len(doomed)
+
+    def __len__(self) -> int:
+        """Return the number of cached entries."""
+        return len(self._store)
+
+
+def report_cache_prefix(user_email: str, report_id: str) -> str:
+    """Return the shared key prefix for all of a user's cached results for a report.
+
+    Both :func:`session_cache_key` and :func:`filter_options_key` build on this
+    prefix, so :meth:`BoundedTTLObjectCache.evict_prefix` clears a report's page
+    caches AND its filter-option cache for one user in a single call (Refresh).
+
+    Args:
+        user_email: The signed-in user's email/identity.
+        report_id: The report registry key.
+
+    Returns:
+        The ``"<email><SEP><report_id><SEP>"`` prefix string.
+    """
+    return f"{user_email or ''}{_KEY_SEP}{report_id or ''}{_KEY_SEP}"
+
+
+def session_cache_key(
+    user_email: str,
+    report_id: str,
+    filters: dict[str, str],
+    search: str,
+    sort_key: str,
+    sort_dir: str,
+    page: int,
+    size: int,
+) -> str:
+    """Build a deterministic per-user cache key for one report page selection.
+
+    The variable part (filters/search/sort/page/size) is JSON-serialized with
+    sorted keys — so it is order-independent over the ``filters`` mapping — and
+    hashed; the key is prefixed with :func:`report_cache_prefix` so it can be
+    prefix-evicted. Including the email means the entry is scoped to one user.
+
+    Args:
+        user_email: The signed-in user's email/identity (scopes the entry).
+        report_id: The report registry key.
+        filters: The active ``field -> value`` selection (order-independent).
+        search: The free-text search string.
+        sort_key: The active sort column (``""`` = server default).
+        sort_dir: The sort direction (``"asc"``/``"desc"``).
+        page: The 1-based page number.
+        size: The page size.
+
+    Returns:
+        A stable cache key string.
+    """
+    variable = json.dumps(
+        {
+            "f": sorted((filters or {}).items()),
+            "q": search or "",
+            "sk": sort_key or "",
+            "sd": sort_dir or "",
+            "p": int(page),
+            "z": int(size),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(variable.encode("utf-8")).hexdigest()[:16]
+    return f"{report_cache_prefix(user_email, report_id)}page{_KEY_SEP}{digest}"
+
+
+def filter_options_key(user_email: str, report_id: str) -> str:
+    """Build the per-user cache key for a report's filter-option lists.
+
+    Args:
+        user_email: The signed-in user's email/identity (scopes the entry).
+        report_id: The report registry key.
+
+    Returns:
+        A stable cache key string sharing :func:`report_cache_prefix`.
+    """
+    return f"{report_cache_prefix(user_email, report_id)}fopts"
 
 
 def apply_filters(rows: list[dict], filters: dict[str, str]) -> list[dict]:

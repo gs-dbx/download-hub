@@ -20,11 +20,13 @@ All app configuration comes from environment variables in `src/app/app.yaml`. Se
 | `DOWNLOAD_GROUP_SUFFIX` | `_dl` | Suffix appended to a report's `view_key` to derive its download group when `download_group` is unset |
 | `DOWNLOADS_ENABLED` | `true` | Global kill switch (`false`/`0`/`no`/`off` disables downloads) |
 | `DOWNLOAD_DISCLAIMER` | (see below) | Custom data-handling notice (optional; falls back to built-in generic) |
-| `MAX_DOWNLOAD_ROWS` | `100000` | Largest CSV built in app memory and returned directly |
 | `MAX_XLSX_ROWS` | `25000` | Largest Excel export; larger requests direct users to CSV |
-| `APP_EXPORT_VOLUME` | (unset) | App-private `/Volumes/...` destination for large CSV delivery |
-| `MAX_SPILL_ROWS` | `1000000` | Largest CSV eligible for volume delivery |
-| `EXPORT_PAGE_ROWS` | `10000` | Rows processed at a time while producing a large CSV |
+| `APP_EXPORT_VOLUME` | (unset) | App-private `/Volumes/...` destination where every export is generated (required for downloads) |
+| `MAX_SPILL_ROWS` | `1000000` | Largest CSV export allowed |
+| `EXPORT_PAGE_ROWS` | `10000` | Rows processed at a time while producing a CSV |
+| `EXPORT_CONCURRENCY` | `2` | Max background export generations running at once (the rest wait as `queued`) |
+| `MAX_FILTER_OPTIONS` | `500` | Cap on each filter dropdown's `DISTINCT` scan (bounds page-load cost on large sources) |
+| `SESSION_CACHE_TTL_SECONDS` | `45` | TTL of the per-user server-side query cache (page results + filter options); Refresh always bypasses it |
 
 ### How branding resolves
 
@@ -74,18 +76,40 @@ Effect:
 
 Re-enable by setting back to `"true"` (or omitting it, defaults to `"true"`).
 
-### Large-result delivery
+### Asynchronous downloads ("My downloads")
 
-The app counts matching rows before retrieving the result. Results within the
-direct limit download normally. Larger CSV results are queried in bounded pages,
-written to temporary disk, uploaded to `APP_EXPORT_VOLUME` as the app service
-principal, and streamed back through a user-scoped retrieval link. End users
-need no direct volume privileges. This avoids holding the
-result or finished file in app memory. Excel requests above `MAX_XLSX_ROWS` ask
-the user to choose CSV. If no export volume is configured, the UI explains how
-to narrow the result and tells administrators which setting is required. Each
-file is stored below a collision-resistant owner key and unique audit ID, so
-concurrent exports cannot overwrite one another.
+Every download is **asynchronous**. `POST /download` validates the request,
+writes the immutable audit row (audit-first), records a row in the mutable
+`export_jobs` table (status `queued`), and schedules a background task — it never
+streams a file. The task generates the export to `APP_EXPORT_VOLUME` as the app
+service principal (CSV in bounded `EXPORT_PAGE_ROWS` pages; Excel within
+`MAX_XLSX_ROWS`) and flips the job to `ready` (or `failed`). Users track and
+retrieve their exports on the **My downloads** page (`GET /downloads`), which
+polls `GET /downloads/status`; the download modal itself also polls the single
+job and reveals a Download button in place when it's ready. `EXPORT_CONCURRENCY`
+bounds how many generations run at once. Each file is stored below a
+collision-resistant owner key and unique job ID (`{email_slug}/{job_id}/{file}`),
+so exports are user-scoped and never overwrite one another.
+
+Because delivery is async, **`APP_EXPORT_VOLUME` is required** — without it
+`POST /download` returns 503. Excel requests above `MAX_XLSX_ROWS`, or CSV above
+`MAX_SPILL_ROWS`, are rejected with guidance to narrow the filters. Generated
+files are pruned after 24h by the `exports_cleanup` scheduled job (see
+`docs/DEPLOY.md`); expired jobs show as `expired` on the My downloads page.
+
+**Interrupted jobs:** on app restart, jobs left `queued`/`running` are reconciled
+at startup — if the file already landed on the volume the job is marked `ready`,
+otherwise `failed` with a "request it again" message. A job that waits past its
+OBO token's lifetime fails the same way (source reads run as the user).
+
+### Server-side session cache
+
+Report page reads (COUNT + rows) and the expensive filter-option `DISTINCT`
+scans are cached in-process per **user** (the cache key includes the signed-in
+identity, so no cross-user leak) for `SESSION_CACHE_TTL_SECONDS`. The **Refresh**
+button evicts a report's cached entries and re-reads on-behalf-of the user. The
+cache is per container (not shared across replicas) and is a convenience, not a
+source of truth.
 
 ---
 

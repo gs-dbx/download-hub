@@ -84,6 +84,12 @@
           </li>
           {% endfor %}
         </ul>
+        <a class="app-sidenav__admin" href="/downloads">
+          <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+            <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+          </svg>
+          My downloads
+        </a>
         {% if user_is_admin|default(false) %}
         <a class="app-sidenav__admin" href="/admin">
           <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">

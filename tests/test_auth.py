@@ -12,6 +12,7 @@ from app.auth import (
     DOWNLOAD_GROUP,
     USER_TOKEN_HEADER,
     can_admin_any,
+    can_download_group,
     can_view,
     collection_admin_group,
     derive_download_group,
@@ -214,6 +215,25 @@ def test_can_admin_any_system_or_any_collection():
     # No collections and not system: False (empty/None tolerated).
     assert can_admin_any(_user("x"), [], "sys") is False
     assert can_admin_any(_user("x"), None, "sys") is False
+
+
+def test_can_download_group_member_allowed():
+    """A member of the report's (derived) download group may download."""
+    r = _report(view_key="efile_ops")  # download group -> efile_ops_dl
+    assert can_download_group(_user("efile_ops_dl"), r, system_admin_group="sys") is True
+
+
+def test_can_download_group_non_member_denied():
+    """A user in neither the download group nor the system-admin group cannot."""
+    r = _report(view_key="efile_ops")
+    assert can_download_group(_user("efile_ops"), r, system_admin_group="sys") is False
+
+
+def test_can_download_group_system_admin_always_allowed():
+    """A system admin may download regardless of download-group membership."""
+    r = _report(view_key="efile_ops")
+    # Only in the system-admin group, not the report's download group.
+    assert can_download_group(_user("sys"), r, system_admin_group="sys") is True
 
 
 def test_group_display_names_tolerates_missing_attrs():

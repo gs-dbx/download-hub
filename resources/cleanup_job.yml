@@ -1,0 +1,19 @@
+resources:
+  jobs:
+    exports_cleanup:
+      name: "[${bundle.target}] download_hub — exports retention cleanup"
+      # Hourly, so the 24h TTL is enforced promptly and the exports volume never
+      # grows unbounded. UTC to match the app's timestamps.
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: "UTC"
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: cleanup
+          notebook_task:
+            notebook_path: ../src/notebooks/cleanup_exports.py   # relative to resources/
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              export_volume: /Volumes/${var.catalog}/${var.schema}/download_exports
+              ttl_hours: "24"

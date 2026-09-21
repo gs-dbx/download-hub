@@ -10,12 +10,15 @@ fully synchronous, every SDK call inside an ``async def`` route is wrapped in
 ``asyncio.to_thread`` so it never blocks the event loop.
 
 The interactive display path uses SERVER-SIDE SQL PAGING: configured filters,
-search, sort, and pagination are all pushed into the SQL (a ``COUNT(*)`` for the
-total + one ``LIMIT/OFFSET`` page per request), run AS THE USER, so a large report
-never materializes in the app. Direct downloads are conservatively capped;
-larger CSV exports are paged to temporary disk and streamed through a UC volume.
-Every identifier is allowlist-validated
-and every value is a bound parameter (see ``reports.build_report_page_query``).
+search, sort, and pagination are all pushed into the SQL (a ``COUNT(*)`` + one
+``LIMIT/OFFSET`` page per request, issued CONCURRENTLY), run AS THE USER, so a
+large report never materializes in the app. Page results and the per-filter
+DISTINCT option lists are cached in-process per user for a short TTL (the Refresh
+button evicts them). Downloads are ASYNCHRONOUS: ``POST /download`` audits +
+records an ``export_jobs`` row and generates the file to a UC volume in a bounded
+background task; the user tracks and retrieves it on the ``/downloads`` page.
+Every identifier is allowlist-validated and every value is a bound parameter
+(see ``reports.build_report_page_query``).
 
 All configuration comes from environment variables (no hardcoded host/token/
 warehouse). ``DATABRICKS_HOST`` and the app service-principal credentials are
@@ -32,6 +35,7 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
@@ -54,6 +58,7 @@ from auth import (
     ADMIN_GROUP,
     DEFAULT_DOWNLOAD_SUFFIX,
     can_admin_any,
+    can_download_group,
     can_view,
     effective_download_group,
     effective_view_group,
@@ -66,7 +71,25 @@ from auth import (
 )
 from cache import (
     BoundedTTLCache,
+    BoundedTTLObjectCache,
+    filter_options_key,
     filters_summary,
+    report_cache_prefix,
+    session_cache_key,
+)
+from jobs import (
+    build_active_export_job_query,
+    build_export_job_by_id_query,
+    build_export_job_insert,
+    build_export_job_row,
+    build_export_job_status_update,
+    build_export_jobs_query,
+    build_export_jobs_reconcile_query,
+    export_job_fingerprint,
+    export_retrieve_subpath,
+    job_view_model,
+    parse_export_job_row,
+    reconcile_job_status,
 )
 from config import (
     DEFAULT_BANNER_TEXT,
@@ -182,22 +205,42 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-# Export size guards. The whole file is built in memory in the (small) app
-# container, so these defaults are chosen to stay comfortably within a typical
-# ~1-2 GB container: CSV is cheap (stdlib), XLSX via openpyxl is much heavier
-# per cell, so it gets a lower cap. Both env-overridable — raise them only if
-# the app container is sized up. Over the cap the user gets a clear "narrow your
-# filters" message instead of an out-of-memory crash.
-_MAX_DOWNLOAD_ROWS = _int_env("MAX_DOWNLOAD_ROWS", 100_000)
+# Export size caps. Every export is generated in the background to the exports
+# volume (never streamed inline), so CSV — written page-by-page (stdlib) — is
+# allowed up to the spill cap. XLSX is built in memory (openpyxl is heavy per
+# cell), so it keeps a lower cap. Both env-overridable. Over the cap the user
+# gets a clear "narrow your filters" 413 instead of an out-of-memory crash.
 _MAX_XLSX_ROWS = _int_env("MAX_XLSX_ROWS", 25_000)
-
-# Over the direct cap but within the spill cap, an export is written to the
-# export volume (APP_EXPORT_VOLUME, a "/Volumes/…" root) as the app SP and
-# retrieved via GET /download/retrieve, so the app never streams a huge file in
-# one blocking response. Unset APP_EXPORT_VOLUME -> no spill (413 as before).
 _MAX_SPILL_ROWS = _int_env("MAX_SPILL_ROWS", 1_000_000)
+
+# All exports are written to the export volume (APP_EXPORT_VOLUME, a "/Volumes/…"
+# root) as the app SP and retrieved via GET /download/retrieve, so the app never
+# streams a huge file in one blocking response. Unset APP_EXPORT_VOLUME -> the
+# async pipeline has nowhere to write, so POST /download returns 503.
 _EXPORT_VOLUME = (os.environ.get("APP_EXPORT_VOLUME") or "").strip()
 _EXPORT_PAGE_ROWS = _int_env("EXPORT_PAGE_ROWS", 10_000)
+
+# Async export queue: how many background generations run at once (the rest wait
+# as "queued"). Bounded so a burst of requests cannot overwhelm the warehouse or
+# the app container. See _run_export_job / _export_semaphore.
+_EXPORT_CONCURRENCY = _int_env("EXPORT_CONCURRENCY", 2)
+
+# Filter dropdowns cap their DISTINCT scan at this many values so a filter over a
+# very large source cannot trigger an unbounded full-table DISTINCT on every page
+# load (a top cause of slow report pages). Env-overridable.
+_MAX_FILTER_OPTIONS = _int_env("MAX_FILTER_OPTIONS", 500)
+
+# Server-side per-session query cache (in-process, per container). Keyed by a
+# string that INCLUDES the user's email (cache.session_cache_key /
+# filter_options_key), so an entry only ever holds that user's own OBO data.
+# Short TTL so edits show soon; the Refresh button evicts a report's entries
+# outright. Page results (COUNT + rendered rows) and the expensive filter-option
+# lists are cached separately so Refresh can clear both by shared key prefix.
+_SESSION_CACHE_TTL = float(_int_env("SESSION_CACHE_TTL_SECONDS", 45))
+_page_cache = BoundedTTLObjectCache(max_size=512, ttl_seconds=_SESSION_CACHE_TTL)
+_filter_options_cache = BoundedTTLObjectCache(
+    max_size=512, ttl_seconds=max(_SESSION_CACHE_TTL, 60.0)
+)
 
 app = FastAPI(title=_APP_NAME)
 
@@ -280,8 +323,15 @@ templates.env.globals.update(
     footer_text=_effective_footer_text,
 )
 
-# Fragment page-size options; "all" -> None ("All", one page).
-_PAGE_SIZES: dict[str, int | None] = {"25": 25, "50": 50, "100": 100, "all": None}
+# Fragment page-size options (bounded — no unbounded "All"; every option pushes a
+# real LIMIT into the SQL). The value doubles as the page LIMIT/OFFSET size.
+_PAGE_SIZES: dict[str, int] = {
+    "10": 10,
+    "25": 25,
+    "100": 100,
+    "500": 500,
+    "1000": 1000,
+}
 _DEFAULT_PAGE_SIZE: int = 25
 
 
@@ -932,9 +982,14 @@ async def _resolve_display_columns(
     return resolve_columns([], cols)
 
 
-def _total_pages(total_rows: int, size: int | None) -> tuple[int, int]:
-    """Return ``(limit, total_pages)`` for a row count + page size (None = All)."""
-    limit = _ALL_PAGE_CAP if size is None else max(1, size)
+def _total_pages(total_rows: int, size: int) -> tuple[int, int]:
+    """Return ``(limit, total_pages)`` for a row count + (bounded) page size.
+
+    ``size`` is always a positive int now that the unbounded "All" option is
+    gone, so the per-page ``limit`` is simply ``max(1, size)`` and never depends
+    on ``total_rows``.
+    """
+    limit = max(1, size)
     return limit, max(1, (max(0, total_rows) + limit - 1) // limit)
 
 
@@ -947,15 +1002,17 @@ async def _query_report_page(
     sort_key: str,
     sort_dir: str,
     page: int,
-    size: int | None,
+    size: int,
     columns: list[ColumnSpec] | None = None,
 ) -> tuple[list[ColumnSpec], list[dict], int]:
     """Run ``COUNT(*)`` + one page of a report OBO (server-side paging).
 
     Filter/search/sort/paginate ALL execute in SQL as the signed-in user, so a
     huge report never materializes in the app (this replaces the read-everything
-    in-memory snapshot for the display path). ``size=None`` ("All") is capped at
-    :data:`_ALL_PAGE_CAP`.
+    in-memory snapshot for the display path). The page ``limit`` is the bounded
+    page size (no unbounded "All"), so it no longer depends on the count — the
+    ``COUNT(*)`` and the page read are issued CONCURRENTLY (``asyncio.gather``),
+    halving the warehouse round-trip latency for the common path.
 
     Returns:
         ``(columns, page_row_dicts, total_rows)``.
@@ -967,14 +1024,9 @@ async def _query_report_page(
         columns = await _resolve_display_columns(token, report)
     col_names = [c.name for c in columns]
     select_cols, aggregates = _column_query_args(report)
-    # Ignore an unknown sort key; numeric columns sort by value (TRY_CAST).
-    numeric_sort = False
-    if sort_key:
-        sc = next((c for c in columns if c.name == sort_key), None)
-        if sc is None:
-            sort_key = ""
-        else:
-            numeric_sort = is_numeric_format(sc.format)
+    # Ignore an unknown sort key (the page read re-validates it too).
+    if sort_key and not any(c.name == sort_key for c in columns):
+        sort_key = ""
     # Only known filter fields with a non-empty value become WHERE equality binds
     # ("" is the "All" sentinel = no constraint). Unknown keys are ignored.
     known = {f.field for f in report.filters}
@@ -989,15 +1041,15 @@ async def _query_report_page(
         search=search or None,
         search_columns=col_names,
     )
-    _c, cdata = await _run_sql(token, count_sql, _to_sdk_params(cparams))
-    total_rows = int(cdata[0][0]) if cdata and cdata[0] else 0
-
-    limit, _tp = _total_pages(total_rows, size)
-    rows = await _query_report_rows(
+    limit = max(1, size)
+    count_coro = _run_sql(token, count_sql, _to_sdk_params(cparams))
+    rows_coro = _query_report_rows(
         token, report, columns=columns,
         selected_filters=selected_filters, search=search, sort_key=sort_key,
         sort_dir=sort_dir, limit=limit, offset=max(0, (page - 1) * limit),
     )
+    (_c, cdata), rows = await asyncio.gather(count_coro, rows_coro)
+    total_rows = int(cdata[0][0]) if cdata and cdata[0] else 0
     return columns, rows, total_rows
 
 
@@ -1048,21 +1100,34 @@ async def _query_report_rows(
 async def _report_filter_options(
     token: str, report: ReportConfig
 ) -> dict[str, list[str]]:
-    """Return distinct values for each configured filter dropdown (OBO)."""
-    options: dict[str, list[str]] = {}
-    for f in report.filters:
-        sql, params = build_distinct_values_query(report.source_query, f.field)
+    """Return distinct values for each configured filter dropdown (OBO).
+
+    Each DISTINCT scan is bounded by :data:`_MAX_FILTER_OPTIONS` (so a filter over
+    a very large source can't trigger an unbounded full-table scan on page load),
+    and all filters are queried CONCURRENTLY (``asyncio.gather``) instead of one
+    after another — turning N sequential warehouse round-trips into one batch.
+    """
+    if not report.filters:
+        return {}
+
+    async def _one(field: str) -> list[str]:
+        sql, params = build_distinct_values_query(
+            report.source_query, field, limit=_MAX_FILTER_OPTIONS
+        )
         _c, data = await _run_sql(token, sql, _to_sdk_params(params))
-        options[f.field] = [str(r[0]) for r in data if r and r[0] is not None]
-    return options
+        return [str(r[0]) for r in data if r and r[0] is not None]
+
+    fields = [f.field for f in report.filters]
+    results = await asyncio.gather(*(_one(f) for f in fields))
+    return dict(zip(fields, results))
 
 
 def _resolve_can_download(me_user, report: ReportConfig) -> bool:
     """Return whether the download button should be shown for a report.
 
-    Gated by the global kill switch AND membership of the report's effective
-    download group (``effective_download_group`` — the explicit per-report group
-    when set, else derived from ``view_key`` + suffix). Pure over an
+    Gated by the global kill switch AND :func:`auth.can_download_group` — a member
+    of the report's effective download group OR a system administrator (system
+    admins may always download, regardless of group). Pure over an
     already-resolved ``me()`` object (no extra I/O); ``None`` -> ``False``.
 
     Args:
@@ -1070,14 +1135,14 @@ def _resolve_can_download(me_user, report: ReportConfig) -> bool:
         report: The active report.
 
     Returns:
-        ``True`` only if downloads are enabled and the user is a member of the
-        report's effective download group; ``False`` otherwise.
+        ``True`` only if downloads are enabled and the user is a system admin or a
+        member of the report's effective download group; ``False`` otherwise.
     """
     if not downloads_enabled(os.environ.get("DOWNLOADS_ENABLED")):
         return False
     if me_user is None:
         return False
-    return is_member(me_user, effective_download_group(report, _DL_SUFFIX))
+    return can_download_group(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP)
 
 
 # ---------------------------------------------------------------------------
@@ -1689,20 +1754,38 @@ async def report_page(request: Request, report_id: str) -> HTMLResponse:
     # No in-memory snapshot — a 1M-row source never materializes in the app.
     if not notice:
         try:
-            filter_options = await _report_filter_options(token, report)
-            columns, page_rows, total_rows = await _query_report_page(
-                token,
-                report,
-                selected_filters={},
-                search="",
-                sort_key="",
-                sort_dir="asc",
-                page=1,
-                size=_DEFAULT_PAGE_SIZE,
+            # Filter options are the expensive DISTINCT scans — cache them
+            # per (user, report) so re-navigation doesn't rescan the source.
+            fo_key = filter_options_key(email, report.report_id)
+            filter_options = _filter_options_cache.get(fo_key)
+            if filter_options is None:
+                filter_options = await _report_filter_options(token, report)
+                _filter_options_cache.put(fo_key, filter_options)
+            # Cache the default first page too (shared shape with report_table),
+            # so returning to a report renders instantly within the TTL.
+            page_key = session_cache_key(
+                email, report.report_id, {}, "", "", "asc", 1, _DEFAULT_PAGE_SIZE
             )
-            _limit, total_pages = _total_pages(total_rows, _DEFAULT_PAGE_SIZE)
-            cells = display_rows(columns, page_rows)
-            fetched_at = _fmt_ts(time.time())
+            cached_page = _page_cache.get(page_key)
+            if cached_page is not None:
+                columns, cells, total_rows, total_pages, fetched_at = cached_page
+            else:
+                columns, page_rows, total_rows = await _query_report_page(
+                    token,
+                    report,
+                    selected_filters={},
+                    search="",
+                    sort_key="",
+                    sort_dir="asc",
+                    page=1,
+                    size=_DEFAULT_PAGE_SIZE,
+                )
+                _limit, total_pages = _total_pages(total_rows, _DEFAULT_PAGE_SIZE)
+                cells = display_rows(columns, page_rows)
+                fetched_at = _fmt_ts(time.time())
+                _page_cache.put(
+                    page_key, (columns, cells, total_rows, total_pages, fetched_at)
+                )
         except RuntimeError as exc:
             notice = str(exc)
         except Exception as exc:  # noqa: BLE001 - render a notice, never a 500
@@ -1827,18 +1910,39 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
         sort_key = request.query_params.get("sort", "")
         sort_dir = request.query_params.get("dir", "asc")
 
-        columns, page_rows, total_rows = await _query_report_page(
-            token,
-            report,
-            selected_filters=selected_filters,
-            search=q,
-            sort_key=sort_key,
-            sort_dir=sort_dir,
-            page=page,
-            size=size,
+        # Server-side per-session cache. The Refresh button sends refresh=1: it
+        # evicts every cached page + the filter options for this (user, report)
+        # so the next read is fresh; otherwise a cache hit skips the warehouse.
+        refresh = (request.query_params.get("refresh") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        prefix = report_cache_prefix(email, report.report_id)
+        if refresh:
+            _page_cache.evict_prefix(prefix)
+            _filter_options_cache.evict_prefix(prefix)
+        cache_key = session_cache_key(
+            email, report.report_id, selected_filters, q, sort_key, sort_dir, page, size
         )
-        _limit, total_pages = _total_pages(total_rows, size)
-        cells = display_rows(columns, page_rows)
+        cached = None if refresh else _page_cache.get(cache_key)
+        if cached is not None:
+            columns, cells, total_rows, total_pages, fetched = cached
+        else:
+            columns, page_rows, total_rows = await _query_report_page(
+                token,
+                report,
+                selected_filters=selected_filters,
+                search=q,
+                sort_key=sort_key,
+                sort_dir=sort_dir,
+                page=page,
+                size=size,
+            )
+            _limit, total_pages = _total_pages(total_rows, size)
+            cells = display_rows(columns, page_rows)
+            fetched = _fmt_ts(time.time())
+            _page_cache.put(
+                cache_key, (columns, cells, total_rows, total_pages, fetched)
+            )
     except RuntimeError as exc:
         # Expected data errors (UC-denied, missing table/column, warehouse, etc.)
         # already carry a friendly message from errors.friendly_error.
@@ -1858,7 +1962,8 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     resp.headers["X-Total-Rows"] = str(total_rows)
     resp.headers["X-Total-Pages"] = str(total_pages)
     resp.headers["X-Page"] = str(max(1, min(page, total_pages)))
-    resp.headers["X-Fetched-At"] = _fmt_ts(time.time())
+    # Report the ORIGINAL fetch time (a cache hit keeps the time it was read).
+    resp.headers["X-Fetched-At"] = fetched
     return resp
 
 
@@ -1924,22 +2029,163 @@ async def report_sql(request: Request, report_id: str) -> Response:
 # field; a checked one sends value="true").
 _ACK_TRUTHY: frozenset[str] = frozenset({"true", "on", "1", "yes"})
 
+# Async export queue state (in-process, per container). ``_export_semaphore``
+# caps concurrent background generations to _EXPORT_CONCURRENCY (the rest wait as
+# "queued"); ``_export_tasks`` holds strong references so tasks are not
+# garbage-collected mid-flight (asyncio only keeps weak refs).
+_export_semaphore = asyncio.Semaphore(_EXPORT_CONCURRENCY)
+_export_tasks: set[asyncio.Task] = set()
+
+
+async def _run_sp_stmt(built: tuple[str, list[dict]]) -> None:
+    """Run a ``(sql, param-dicts)`` builder result as the app SP."""
+    sql, dicts = built
+    await _run_sql_sp(sql, _to_sdk_params(dicts))
+
+
+async def _generate_export_to_volume(
+    token: str,
+    report: ReportConfig,
+    columns: list[ColumnSpec],
+    selected_filters: dict[str, str],
+    search: str,
+    n: int,
+    subpath: str,
+    fmt: str,
+    disclaimer: str,
+) -> str:
+    """Generate one export file to the exports volume as the app SP.
+
+    CSV is written page-by-page (``_EXPORT_PAGE_ROWS``) to a tempfile and
+    streamed up, so even a 1M-row export never materializes fully in app memory;
+    XLSX (bounded by ``_MAX_XLSX_ROWS``) is built in memory then uploaded. Reads
+    run OBO (the caller's token) so Unity Catalog SELECT is enforced per-user; the
+    upload runs as the app SP. Returns the resolved ``/Volumes/...`` path.
+
+    Raises:
+        ReportDataError: If the result shrank while paging (source changed).
+    """
+    if fmt == "xlsx":
+        rows = await _query_report_rows(
+            token, report, columns=columns,
+            selected_filters=selected_filters, search=search, sort_key="",
+            sort_dir="asc", limit=max(1, n), offset=0,
+        )
+        data = to_xlsx_bytes(columns, rows, disclaimer)
+        return await asyncio.to_thread(
+            _vol_upload_file, _app_sp_client(), _EXPORT_VOLUME, subpath, data
+        )
+    with tempfile.TemporaryFile(mode="w+b") as raw_file:
+        text_file = io.TextIOWrapper(
+            raw_file, encoding="utf-8", newline="", write_through=True
+        )
+        try:
+            offset = 0
+            while offset < n:
+                page_rows = await _query_report_rows(
+                    token, report, columns=columns,
+                    selected_filters=selected_filters, search=search,
+                    sort_key="", sort_dir="asc",
+                    limit=min(_EXPORT_PAGE_ROWS, n - offset), offset=offset,
+                )
+                if not page_rows:
+                    raise ReportDataError(
+                        "The export changed while it was being prepared. "
+                        "Request it again."
+                    )
+                write_csv(
+                    text_file, columns, page_rows,
+                    disclaimer if offset == 0 else "",
+                    include_header=offset == 0,
+                )
+                offset += len(page_rows)
+            text_file.flush()
+            raw_file.seek(0)
+            return await asyncio.to_thread(
+                _vol_upload_file, _app_sp_client(), _EXPORT_VOLUME, subpath, raw_file
+            )
+        finally:
+            text_file.detach()
+
+
+async def _run_export_job(
+    token: str,
+    report: ReportConfig,
+    columns: list[ColumnSpec],
+    selected_filters: dict[str, str],
+    search: str,
+    n: int,
+    *,
+    job_id: str,
+    subpath: str,
+    fmt: str,
+    disclaimer: str,
+) -> None:
+    """Background task: generate an export and transition its ``export_jobs`` row.
+
+    Runs under ``_export_semaphore`` (bounded concurrency), so only
+    _EXPORT_CONCURRENCY generations run at once and the rest stay ``queued``.
+    Transitions the job ``running`` -> ``ready`` (with the retrieve path) on
+    success, or ``failed`` (with a friendly message) on any error. Never raises —
+    a background task must not crash the event loop.
+    """
+    catalog = os.environ.get("APP_CATALOG", "")
+    schema = os.environ.get("APP_SCHEMA", "")
+    async with _export_semaphore:
+        try:
+            await _run_sp_stmt(
+                build_export_job_status_update(
+                    catalog, schema, job_id=job_id, status="running"
+                )
+            )
+            await _generate_export_to_volume(
+                token, report, columns, selected_filters, search, n, subpath,
+                fmt, disclaimer,
+            )
+            await _run_sp_stmt(
+                build_export_job_status_update(
+                    catalog, schema, job_id=job_id, status="ready",
+                    retrieve_path=subpath,
+                )
+            )
+            print(
+                f"[download-hub] export ready: job_id={job_id!r} "
+                f"report_id={report.report_id!r} rows={n} format={fmt} path={subpath!r}"
+            )
+        except Exception as exc:  # noqa: BLE001 - mark failed; never crash the loop
+            msg = str(exc) if isinstance(exc, ReportDataError) else friendly_volume_error(exc)
+            print(
+                f"[download-hub] export FAILED: job_id={job_id!r} "
+                f"report_id={report.report_id!r}: {exc}"
+            )
+            try:
+                await _run_sp_stmt(
+                    build_export_job_status_update(
+                        catalog, schema, job_id=job_id, status="failed", message=msg
+                    )
+                )
+            except Exception as exc2:  # noqa: BLE001 - best effort
+                print(f"[download-hub] could not mark job {job_id!r} failed: {exc2}")
+
 
 @app.post("/download")
 async def download(request: Request) -> Response:
-    """Export the current filtered view of ANY report — gated, acknowledged, audited.
+    """Enqueue an ASYNCHRONOUS export of the current filtered view (audit-first).
 
-    Works on any configured report (LOCKED DECISION L1): the per-filter form
-    fields are dynamic, so the raw form is read via ``await request.form()``.
-    Flow (audit-first): validate the OBO token (401) -> kill switch (403) ->
-    resolve the report (404) -> re-check membership of the report's effective
-    download group (403; never trust the hidden UI; degrade-safe deny) ->
-    acknowledgement + justification (400) -> read the
-    full filtered/searched result AS THE USER via server-side SQL (filter/search
-    pushed down), count it before retrieval -> build or incrementally stage the
-    file for the report's
-    display columns -> write EXACTLY ONE audit row as the app SP (must reach SUCCEEDED,
-    else 500 and NO file) -> emit an app-log line -> return the attachment.
+    All downloads are async: this validates the request, writes the immutable
+    audit row, records a mutable ``export_jobs`` row (status ``queued``), and
+    schedules a background task that generates the file to the exports volume.
+    No file bytes are returned — the response points the user to the My downloads
+    page (``GET /downloads``); the file is retrieved via
+    ``GET /download/retrieve?job_id=``. This keeps the request instant regardless
+    of result size and gives the user clear, trackable feedback.
+
+    Flow (audit-first, strict order): OBO token (401) -> kill switch (403) ->
+    resolve report (404/503) -> system-admin-or-download-group re-check (403) ->
+    acknowledgement + justification (400) -> size caps (413) / no export volume
+    (503) -> row count -> dedupe an in-flight identical request -> AUDIT ROW as
+    the app SP (500 if it fails, no job) -> INSERT ``export_jobs`` row (503 if it
+    fails) -> schedule background generation -> return the queued JSON.
 
     Args:
         request: The incoming request. Headers carry the OBO token + email; the
@@ -1947,13 +2193,11 @@ async def download(request: Request) -> Response:
             ``justification``, ``format``, and one field per report filter.
 
     Returns:
-        A ``Response`` with the file bytes and a download ``Content-Disposition``.
+        A JSON ``{"queued": true, "job_id": ..., "downloads_url": "/downloads",
+        "message": ...}`` payload.
 
     Raises:
-        HTTPException: 401 (no OBO token), 403 (kill switch or not a member of
-            the report's download group), 404 (unknown/disabled report), 400
-            (missing acknowledgement/justification), 500 (audit write
-            failed — no file), 503 (source unreadable as the user).
+        HTTPException: 401, 403, 404, 400, 413, 500, 503 as described above.
     """
     # 1) OBO token + best-effort email for the audit row.
     try:
@@ -1964,9 +2208,8 @@ async def download(request: Request) -> Response:
 
     form = await request.form()
 
-    # 1b) Global kill switch (LOCKED DECISION L1): if downloads are disabled,
-    # 403 regardless of group membership — checked before report resolution and
-    # the membership re-check so the feature is off for everyone when toggled off.
+    # 1b) Global kill switch: if downloads are disabled, 403 for everyone
+    # (including system admins) before any report resolution.
     if not downloads_enabled(os.environ.get("DOWNLOADS_ENABLED")):
         raise HTTPException(
             status_code=403,
@@ -1988,18 +2231,18 @@ async def download(request: Request) -> Response:
             detail="The requested report is unavailable or has been disabled.",
         )
 
-    # 3) Server-side group re-check against the report's effective download group
-    # (explicit, else derived from view_key + suffix). Defense in depth; never
-    # fail open.
-    group = effective_download_group(report, _DL_SUFFIX)
+    # 3) Server-side re-check: a system admin OR a member of the report's
+    # effective download group. Defense in depth; never fail open.
     me_user = await _me(token)
-    if me_user is None or not is_member(me_user, group):
+    if me_user is None or not can_download_group(
+        me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP
+    ):
         raise HTTPException(
             status_code=403,
             detail="You are not authorized to download this data.",
         )
-    # Readable email for the audit row, the spill subfolder, and logs (the OBO
-    # export read below is keyed by the user's token, not the email).
+    # Readable email for the audit row, the owner subfolder, and logs (the OBO
+    # export read in the background is keyed by the user's token, not the email).
     email = _readable_email(me_user, email)
 
     # 4) Validate acknowledgement + justification.
@@ -2023,15 +2266,21 @@ async def download(request: Request) -> Response:
         selected_filters[f.field] = str(val) if val is not None else ""
     search = str(form.get("search", ""))
 
-    # 7) Size-policy caps (format-dependent). Large CSV exports are staged in
-    # bounded pages; direct CSV and Excel exports stay within memory-safe caps.
-    fmt = "xlsx" if str(form.get("format", "csv")) == "xlsx" else "csv"
-    direct_cap = _MAX_XLSX_ROWS if fmt == "xlsx" else _MAX_DOWNLOAD_ROWS
-    spill_cap = _MAX_SPILL_ROWS
+    # 6) Async delivery requires the exports volume; without it there is nowhere
+    # to generate the file, so refuse clearly.
+    if not _EXPORT_VOLUME:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Downloads are not available: no export volume is configured. Ask "
+                "an administrator to set APP_EXPORT_VOLUME."
+            ),
+        )
 
-    # 8) Count first and fetch only one row. This makes an over-limit decision
-    # without accidentally materializing the very result we intend to reject or
-    # deliver incrementally.
+    fmt = "xlsx" if str(form.get("format", "csv")) == "xlsx" else "csv"
+
+    # 7) Count first (fetch only one row). The count decides the size caps without
+    # materializing the full result.
     try:
         columns, _sample, n = await _query_report_page(
             token,
@@ -2046,79 +2295,62 @@ async def download(request: Request) -> Response:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    # At/under the direct cap the file downloads inline. Over it but within the
-    # spill cap, it's written to the app-private export volume and retrieved separately,
-    # so the app never blocks on one huge response. Beyond the spill cap — or with
-    # no export volume configured — a 413 asks to narrow.
-    spill = n > direct_cap
-    if spill and fmt == "xlsx":
+    # Size caps. XLSX is memory-heavy (openpyxl), so it keeps the lower cap; CSV
+    # is streamed page-by-page and allowed up to the spill cap.
+    if fmt == "xlsx" and n > _MAX_XLSX_ROWS:
         raise HTTPException(
             status_code=413,
             detail=(
-                f"This export has {n:,} rows, above the {direct_cap:,}-row Excel "
-                "limit. Choose CSV for large-result delivery, or narrow the filters."
+                f"This export has {n:,} rows, above the {_MAX_XLSX_ROWS:,}-row Excel "
+                "limit. Choose CSV for large results, or narrow the filters."
             ),
         )
-    if spill and not _EXPORT_VOLUME:
+    if fmt == "csv" and n > _MAX_SPILL_ROWS:
         raise HTTPException(
             status_code=413,
             detail=(
-                f"This export has {n:,} rows, above the {direct_cap:,}-row direct "
-                f"download limit, and no export volume is configured. Narrow the "
-                "filters, or ask an administrator to configure "
-                "APP_EXPORT_VOLUME."
-            ),
-        )
-    if spill and n > spill_cap:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"This export has {n:,} rows, above the {spill_cap:,}-row export "
-                "limit even for volume delivery. Narrow the filters."
+                f"This export has {n:,} rows, above the {_MAX_SPILL_ROWS:,}-row "
+                "export limit. Narrow the filters."
             ),
         )
 
-    # Direct files stay in memory within the conservative cap. Large CSV files
-    # are written page-by-page to a temporary file below.
-    disclaimer = await _effective_disclaimer()
-    file_bytes: bytes | None = None
-    searched: list[dict] = []
-    if not spill:
-        try:
-            searched = await _query_report_rows(
-                token, report, columns=columns,
-                selected_filters=selected_filters, search=search, sort_key="",
-                sort_dir="asc", limit=max(1, n), offset=0,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if fmt == "xlsx":
-        file_bytes = to_xlsx_bytes(columns, searched, disclaimer)
-        media_type = (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    elif not spill:
-        file_bytes = to_csv_bytes(columns, searched, disclaimer)
-        media_type = "text/csv"
-    else:
-        media_type = "text/csv"
-    fname = filename_for(report.report_id, "", fmt)
-
-    # 9) AUDIT-FIRST (NFR-5): build exactly one audit row as the app SP; the
-    # INSERT must reach SUCCEEDED before the file/link is delivered (inline OR
-    # spilled to the volume), else HTTP 500. For the spill path the volume upload
-    # runs BEFORE the audit, so a failed upload never records a delivery that did
-    # not happen. The delivery mode is recorded in the summary.
     catalog = _env("APP_CATALOG")
     schema = _env("APP_SCHEMA")
     app_version = _env("APP_VERSION", "0.0.0")
+    slug = _email_slug(email)
     summary = filters_summary(selected_filters)
-    if spill:
-        summary = (summary + "; " if summary else "") + "delivery=volume"
+    fingerprint = export_job_fingerprint(email, report.report_id, fmt, summary, search)
+
+    # 8) Dedupe: if an identical request from this user is already queued/running,
+    # return that job instead of enqueuing (and generating) a duplicate.
+    try:
+        aj_sql, aj_params = build_active_export_job_query(
+            catalog, schema, slug, fingerprint
+        )
+        _c, adata = await _run_sql_sp_query(aj_sql, _to_sdk_params(aj_params))
+    except RuntimeError:
+        adata = []  # dedupe is best-effort — a lookup failure just skips it
+    if adata:
+        existing = parse_export_job_row(list(_c), adata[0])
+        return JSONResponse(
+            {
+                "queued": True,
+                "job_id": existing.get("job_id", ""),
+                "downloads_url": "/downloads",
+                "message": (
+                    "This export is already being prepared. Track it on the My "
+                    "downloads page."
+                ),
+            }
+        )
+
+    # 9) AUDIT-FIRST: exactly one audit row as the app SP; it MUST reach SUCCEEDED
+    # before any job is recorded or file generated, else HTTP 500 (no job).
+    audit_summary = (summary + "; " if summary else "") + "delivery=async"
     audit_row = build_audit_row(
         user_email=email,
         report_date="",
-        filter_summary=summary,
+        filter_summary=audit_summary,
         search_filter=search,
         row_count=n,
         export_format=fmt,
@@ -2128,123 +2360,88 @@ async def download(request: Request) -> Response:
         report_title=report.title,
         source_query=report.source_query,
     )
-    sql, param_dicts = build_audit_insert(catalog, schema, audit_row)
-    audit_params = [StatementParameterListItem(**d) for d in param_dicts]
-
-    async def _write_audit() -> None:
-        """Write the single audit row as the app SP (audit-first); 500 on failure."""
-        try:
-            await _run_sql_sp(sql, audit_params)
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Download blocked: audit write failed ({exc}).",
-            ) from exc
-
-    # 10a) Inline delivery (at/under the direct cap): audit-first, then return
-    # the attachment.
-    if not spill:
-        await _write_audit()
-        print(
-            f"[download-hub] download audited: user={email!r} "
-            f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
-            f"rows={n} format={fmt}"
-        )
-        return Response(
-            content=file_bytes or b"",
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
-            },
-        )
-
-    # 10b) Spill delivery: write the file to the private export volume as the app
-    # SP. End users need no direct volume privileges; this route already checked
-    # their OBO identity, report access, and download-group membership.
-    # under their own per-email subfolder, FIRST — so a failed upload never leaves
-    # an audit row claiming a delivery that never happened — THEN write the audit
-    # row before returning the retrieval link (GET /download/retrieve?path=…).
-    # The owner key prevents cross-user slug collisions; the audit-id directory
-    # prevents concurrent/repeated exports from overwriting one another while
-    # preserving the clean filename returned in Content-Disposition.
-    subpath = f"{_email_slug(email)}/{audit_row['audit_id']}/{fname}"
+    a_sql, a_dicts = build_audit_insert(catalog, schema, audit_row)
     try:
-        with tempfile.TemporaryFile(mode="w+b") as raw_file:
-            text_file = io.TextIOWrapper(
-                raw_file, encoding="utf-8", newline="", write_through=True
-            )
-            try:
-                offset = 0
-                while offset < n:
-                    page_rows = await _query_report_rows(
-                        token, report, columns=columns,
-                        selected_filters=selected_filters, search=search,
-                        sort_key="", sort_dir="asc",
-                        limit=min(_EXPORT_PAGE_ROWS, n - offset), offset=offset,
-                    )
-                    if not page_rows:
-                        raise ReportDataError(
-                            "The export changed while it was being prepared. "
-                            "Refresh the report and try again."
-                        )
-                    write_csv(
-                        text_file, columns, page_rows,
-                        disclaimer if offset == 0 else "",
-                        include_header=offset == 0,
-                    )
-                    offset += len(page_rows)
-                text_file.flush()
-                raw_file.seek(0)
-                vol_path = await asyncio.to_thread(
-                    _vol_upload_file,
-                    _app_sp_client(),
-                    _EXPORT_VOLUME,
-                    subpath,
-                    raw_file,
-                )
-            finally:
-                text_file.detach()
-    except ReportDataError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 - map SDK/Files errors to friendly text
-        raise HTTPException(status_code=502, detail=friendly_volume_error(exc)) from exc
-    await _write_audit()
+        await _run_sql_sp(a_sql, _to_sdk_params(a_dicts))
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Download blocked: audit write failed ({exc}).",
+        ) from exc
+
+    # 10) Record the export job (status queued). The retrieve path is
+    # {slug}/{job_id}/{fname}: the slug is the per-user ownership boundary, the
+    # job_id dir prevents collisions between concurrent/repeat exports.
+    job_id = str(uuid.uuid4())
+    fname = filename_for(report.report_id, "", fmt)
+    subpath = export_retrieve_subpath(slug, job_id, fname)
+    job_row = build_export_job_row(
+        job_id=job_id,
+        audit_id=audit_row["audit_id"],
+        user_email=email,
+        email_slug=slug,
+        report_id=report.report_id,
+        report_title=report.title,
+        export_format=fmt,
+        row_count=n,
+        retrieve_path=subpath,
+        fingerprint=fingerprint,
+    )
+    try:
+        await _run_sp_stmt(build_export_job_insert(catalog, schema, job_row))
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not queue the download ({exc}). Try again.",
+        ) from exc
+
+    # 11) Schedule the background generation (keep a strong ref so it isn't GC'd).
+    disclaimer = await _effective_disclaimer()
+    task = asyncio.create_task(
+        _run_export_job(
+            token, report, columns, selected_filters, search, n,
+            job_id=job_id, subpath=subpath, fmt=fmt, disclaimer=disclaimer,
+        )
+    )
+    _export_tasks.add(task)
+    task.add_done_callback(_export_tasks.discard)
+
     print(
-        f"[download-hub] export spilled to volume: user={email!r} "
-        f"report_id={report.report_id!r} audit_id={audit_row['audit_id']} "
-        f"rows={n} format={fmt} path={vol_path!r}"
+        f"[download-hub] download queued: user={email!r} "
+        f"report_id={report.report_id!r} job_id={job_id} audit_id={audit_row['audit_id']} "
+        f"rows={n} format={fmt}"
     )
     return JSONResponse(
         {
-            "spilled": True,
+            "queued": True,
+            "job_id": job_id,
             "rows": n,
-            "filename": fname,
-            "volume_path": vol_path,
-            "retrieve_path": subpath,
+            "downloads_url": "/downloads",
             "message": (
-                f"Your export has {n:,} rows — too large to download directly, so "
-                f"it was saved to the exports volume. It's ready to download now."
+                f"Your download of {n:,} row(s) is being prepared. It will appear "
+                "on the My downloads page when ready."
             ),
         }
     )
 
 
 @app.get("/download/retrieve")
-async def download_retrieve(request: Request, path: str) -> Response:
-    """Stream a previously-spilled export from the app-private export volume.
+async def download_retrieve(
+    request: Request, path: str = "", job_id: str = ""
+) -> Response:
+    """Stream a generated export from the app-private export volume.
 
-    ``path`` is the root-relative subpath returned by ``POST /download`` when it
-    spills. Access is scoped to the requesting user's own ``{email_slug}/…``
-    subfolder (defense in depth on top of the volumes.py path-jail), so users can
-    only retrieve their own exports. The Files API read runs as the app SP, so
-    end users receive no direct volume access. No re-audit — the spill was
-    already audited.
+    Preferred form is ``?job_id=`` (used by the async pipeline): the job row is
+    looked up as the app SP, its owner is verified against the caller, and its
+    file is streamed once ``ready``. The legacy ``?path=`` form (a root-relative
+    subpath) is still accepted. Either way access is scoped to the caller's own
+    ``{email_slug}/…`` subfolder (defense in depth on top of the volumes.py
+    path-jail), the Files API read runs as the app SP (end users get no direct
+    volume access), and there is no re-audit — the export was audited at enqueue.
 
     Raises:
-        HTTPException: 401 (no OBO token), 404 (no export volume), 403 (not the
-            owner's path), 400 (path escapes root), 404 (file gone/unreadable).
+        HTTPException: 401 (no OBO token), 404 (no export volume / job / file),
+            403 (not the owner), 409 (job not ready), 400 (bad path), 503.
     """
     try:
         token = extract_user_token(request.headers)
@@ -2264,7 +2461,35 @@ async def download_retrieve(request: Request, path: str) -> Response:
         )
     email = _readable_email(me_user, email)
     slug = _email_slug(email)
-    norm = (path or "").strip().lstrip("/")
+
+    if job_id:
+        # Resolve the job -> its file subpath; verify ownership + readiness.
+        try:
+            j_sql, j_params = build_export_job_by_id_query(
+                _env("APP_CATALOG"), _env("APP_SCHEMA"), job_id
+            )
+            _c, jdata = await _run_sql_sp_query(j_sql, _to_sdk_params(j_params))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not jdata:
+            raise HTTPException(status_code=404, detail="That download was not found.")
+        jrow = parse_export_job_row(list(_c), jdata[0])
+        vm = job_view_model(jrow)
+        if jrow.get("email_slug") != slug:
+            raise HTTPException(
+                status_code=403, detail="You can only retrieve your own exports."
+            )
+        if not vm["is_ready"]:
+            raise HTTPException(
+                status_code=409,
+                detail="That download is not ready yet. Check the My downloads page.",
+            )
+        norm = (jrow.get("retrieve_path") or "").strip().lstrip("/")
+    else:
+        norm = (path or "").strip().lstrip("/")
+    if not norm:
+        raise HTTPException(status_code=400, detail="No export was specified.")
+    # Ownership defense-in-depth for both forms.
     if norm != slug and not norm.startswith(slug + "/"):
         raise HTTPException(status_code=403, detail="You can only retrieve your own exports.")
     try:
@@ -2301,6 +2526,150 @@ async def download_retrieve(request: Request, path: str) -> Response:
             "Content-Disposition": f'attachment; filename="{sanitize_filename(fname)}"'
         },
     )
+
+
+# ======================================================================
+# My downloads (async export jobs) — the queued-export tracking page + poll API
+# ======================================================================
+# All report downloads are async: POST /download enqueues a job and this page
+# lists the signed-in user's jobs (scoped by email_slug, read as the app SP) with
+# a retrieve link once ready. GET /downloads/status is the JSON the page polls
+# while any job is still queued/running.
+
+
+async def _load_user_jobs(slug: str) -> list[dict]:
+    """Return the signed-in user's export jobs as view-models (SP read).
+
+    Scoped to ``slug`` (the per-user ownership key). Tolerates a missing
+    ``export_jobs`` table (returns ``[]``) so an install that predates the async
+    pipeline still renders an empty My downloads page.
+    """
+    try:
+        j_sql, j_params = build_export_jobs_query(
+            _env("APP_CATALOG"), _env("APP_SCHEMA"), slug, 50
+        )
+        cols, data = await _run_sql_sp_query(j_sql, _to_sdk_params(j_params))
+    except RuntimeError:
+        return []
+    return [job_view_model(parse_export_job_row(list(cols), row)) for row in data]
+
+
+@app.get("/downloads", response_class=HTMLResponse)
+async def downloads_page(request: Request) -> Response:
+    """Render the My downloads page: the user's queued/ready/failed exports.
+
+    Raises nothing — a missing token / identity renders an error page; a missing
+    export_jobs table renders an empty state.
+    """
+    try:
+        token = extract_user_token(request.headers)
+    except PermissionError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {"message": str(exc), "nav_reports": [], "active_report_id": ""},
+            status_code=401,
+        )
+    email = extract_user_email(request.headers)
+    me_user = await _me(token)
+    if me_user is None:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "message": "Your identity could not be verified. Refresh and try again.",
+                "nav_reports": [],
+                "active_report_id": "",
+            },
+            status_code=503,
+        )
+    slug = _email_slug(_readable_email(me_user, email))
+    jobs = await _load_user_jobs(slug)
+    return templates.TemplateResponse(
+        request,
+        "downloads.html",
+        {
+            "nav_reports": [],
+            "active_report_id": "",
+            "jobs": jobs,
+            "any_active": any(j["is_active"] for j in jobs),
+            "app_version": _env("APP_VERSION", "0.0.0"),
+        },
+    )
+
+
+@app.get("/downloads/status")
+async def downloads_status(request: Request) -> Response:
+    """Return the user's export jobs as JSON (polled by the My downloads page)."""
+    try:
+        token = extract_user_token(request.headers)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    email = extract_user_email(request.headers)
+    me_user = await _me(token)
+    if me_user is None:
+        raise HTTPException(status_code=503, detail="Identity could not be verified.")
+    slug = _email_slug(_readable_email(me_user, email))
+    jobs = await _load_user_jobs(slug)
+    return JSONResponse({"jobs": jobs})
+
+
+async def _vol_file_exists(subpath: str) -> bool:
+    """Return whether ``subpath`` exists on the exports volume (app SP; degrade-safe)."""
+    if not _EXPORT_VOLUME or not subpath:
+        return False
+
+    def _check() -> bool:
+        try:
+            stream, _fname = _vol_open_download(
+                _app_sp_client(), _EXPORT_VOLUME, subpath
+            )
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+            return True
+        except Exception:  # noqa: BLE001 - any error => treat as absent
+            return False
+
+    return await asyncio.to_thread(_check)
+
+
+@app.on_event("startup")
+async def _reconcile_export_jobs() -> None:
+    """Reconcile export jobs interrupted by a restart (best-effort, never fatal).
+
+    In-memory generation tasks are lost on restart, so jobs left ``queued`` or
+    ``running`` are orphaned. For each, check whether its file already landed on
+    the volume: present => mark ``ready``; absent => mark ``failed`` with a
+    re-request message (pure decision in :func:`jobs.reconcile_job_status`). The
+    reconcile query returns ONLY active rows, so every transition is real.
+    """
+    try:
+        if not _EXPORT_VOLUME:
+            return
+        cat = os.environ.get("APP_CATALOG", "")
+        sch = os.environ.get("APP_SCHEMA", "")
+        if not cat or not sch:
+            return
+        cols, data = await _run_sql_sp_query(
+            build_export_jobs_reconcile_query(cat, sch)
+        )
+        idx = {c: i for i, c in enumerate(cols)}
+        for row in data:
+            job_id = str(row[idx.get("job_id", 0)] or "")
+            retrieve_path = str(row[idx.get("retrieve_path", 1)] or "")
+            status = str(row[idx.get("status", 2)] or "")
+            exists = await _vol_file_exists(retrieve_path)
+            new_status, message = reconcile_job_status(status, exists)
+            await _run_sp_stmt(
+                build_export_job_status_update(
+                    cat, sch, job_id=job_id, status=new_status, message=message
+                )
+            )
+        if data:
+            print(f"[download-hub] reconciled {len(data)} interrupted export job(s)")
+    except Exception as exc:  # noqa: BLE001 - reconciliation must never break startup
+        print(f"[download-hub] export-job reconcile skipped: {exc_summary(exc)}")
 
 
 # ======================================================================
@@ -2405,9 +2774,12 @@ async def volume_download(request: Request, report_id: str) -> Response:
 
     report = await _resolve_volume_report(report_id)
 
-    group = effective_download_group(report, _DL_SUFFIX)
+    # System admins may always download; everyone else must be in the report's
+    # download group (see auth.can_download_group).
     me_user = await _me(token)
-    if me_user is None or not is_member(me_user, group):
+    if me_user is None or not can_download_group(
+        me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP
+    ):
         raise HTTPException(
             status_code=403, detail="You are not authorized to download this file."
         )

@@ -540,6 +540,20 @@ def test_build_distinct_values_query_bad_field_raises():
         build_distinct_values_query(_SRC, "channel; DROP")
 
 
+def test_build_distinct_values_query_limit_appended():
+    """A positive limit bounds the scan with a trailing LIMIT clause."""
+    sql, params = build_distinct_values_query(_SRC, "channel", limit=500)
+    assert sql.strip().endswith("ORDER BY channel LIMIT 500")
+    assert params == []
+
+
+def test_build_distinct_values_query_limit_ignored_when_nonpositive():
+    """A None/zero/negative limit adds no LIMIT clause."""
+    for lim in (None, 0, -5):
+        sql, _ = build_distinct_values_query(_SRC, "channel", limit=lim)
+        assert "LIMIT" not in sql, lim
+
+
 # --- build_report_config_query -------------------------------------------
 
 

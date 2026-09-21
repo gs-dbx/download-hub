@@ -25,7 +25,7 @@ env:
   - name: APP_LOGO
     value: "/static/img/logo.svg"
   - name: APP_VERSION
-    value: "0.8.0"
+    value: "0.9.0"
   # Workspace groups used for the admin console and derived download groups.
   # ADMIN_GROUP is retained for backward compatibility; SYSTEM_ADMIN_GROUP is the
   # app-wide (system) admin tier — members administer EVERY resource collection
@@ -49,6 +49,19 @@ env:
   # Large CSV exports are queried and written in bounded pages.
   - name: EXPORT_PAGE_ROWS
     value: "10000"
+  # Async downloads: every download is queued and generated in the background to
+  # APP_EXPORT_VOLUME, then tracked on the "My downloads" page. This caps how many
+  # generations run at once (the rest wait as "queued").
+  - name: EXPORT_CONCURRENCY
+    value: "2"
+  # Performance: cap each filter dropdown's DISTINCT scan so a filter over a very
+  # large source can't trigger an unbounded full-table scan on every page load.
+  - name: MAX_FILTER_OPTIONS
+    value: "500"
+  # Server-side per-session query cache TTL (seconds). Page results + filter
+  # options are cached per user; the Refresh button always bypasses/evicts.
+  - name: SESSION_CACHE_TTL_SECONDS
+    value: "45"
   # Acknowledgement text shown in the download modal AND embedded atop every
   # export. Leave unset to use the generic built-in default (exports.py). Set a
   # multi-line block scalar here to supply your org's data-handling notice, e.g.:

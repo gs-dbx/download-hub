@@ -164,6 +164,41 @@ spark.sql(
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 4c. Create the async export-job table (empty, idempotent)
+# MAGIC
+# MAGIC Downloads are asynchronous: `POST /download` writes an immutable audit row
+# MAGIC and this MUTABLE `export_jobs` row (status `queued`), then generates the
+# MAGIC file to the exports volume in the background. The app updates `status` as
+# MAGIC the app service principal; the cleanup job marks old rows `expired`.
+# MAGIC `CREATE TABLE IF NOT EXISTS ... USING DELTA` so reruns never clobber rows.
+
+# COMMAND ----------
+
+export_jobs_fqn = f"{schema_fqn}.export_jobs"
+spark.sql(
+    f"""
+    CREATE TABLE IF NOT EXISTS {export_jobs_fqn} (
+      job_id STRING,
+      audit_id STRING,
+      created_ts TIMESTAMP,
+      updated_ts TIMESTAMP,
+      user_email STRING,
+      email_slug STRING,
+      report_id STRING,
+      report_title STRING,
+      export_format STRING,
+      row_count BIGINT,
+      status STRING,
+      retrieve_path STRING,
+      message STRING,
+      fingerprint STRING
+    ) USING DELTA
+    """
+)
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ### 4a. Migrate pre-existing audit tables (idempotent)
 # MAGIC
 # MAGIC For installs created before Phase 8 the audit table has only 11 columns.

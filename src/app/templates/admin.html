@@ -100,7 +100,7 @@
     <form class="usa-form" id="view-form" data-role="view-form">
       <div class="app-formgrid">
         <div class="app-field">
-          <label class="usa-label" for="view-key">Collection key (Databricks group)</label>
+          <label class="usa-label" for="view-key">Collection key (Databricks group)<span class="app-tip" tabindex="0" role="note" aria-label="Help: collection key">i<span class="app-tip__bubble">This value is also the Databricks group that grants access — only members of this group (or system admins) see the collection and its resources. Create the matching group and add users, or the collection stays hidden from them.</span></span></label>
           <input class="usa-input" id="view-key" name="view_key" required
                  pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
           <span class="usa-hint">Bare identifier — letters/digits/underscore, no leading digit.</span>
@@ -110,7 +110,7 @@
           <input class="usa-input" id="view-title" name="title" required autocomplete="off">
         </div>
         <div class="app-field">
-          <label class="usa-label" for="view-admin-group">Admin group (delegated admins)</label>
+          <label class="usa-label" for="view-admin-group">Admin group (delegated admins)<span class="app-tip" tabindex="0" role="note" aria-label="Help: admin group">i<span class="app-tip__bubble">Optional Databricks group whose members may manage ONLY this collection's resources (a delegated/resource-group admin). Leave blank to restrict management to system admins.</span></span></label>
           <input class="usa-input" id="view-admin-group" name="admin_group"
                  pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
           <span class="usa-hint">Optional Databricks group; its members may edit only this collection's resources. Blank = system admins only.</span>
@@ -194,7 +194,7 @@
           <input class="usa-input" id="r-title" name="title" required autocomplete="off">
         </div>
         <div class="app-field app-field--narrow">
-          <label class="usa-label" for="r-view">Resource collection</label>
+          <label class="usa-label" for="r-view">Resource collection<span class="app-tip" tabindex="0" role="note" aria-label="Help: resource collection">i<span class="app-tip__bubble">The collection this resource belongs to. Users must belong to that collection's group (its key) to see it; system admins see all.</span></span></label>
           <select class="usa-select" id="r-view" name="view_key" required>
             <option value="">— choose —</option>
             {% for v in views %}
@@ -203,7 +203,7 @@
           </select>
         </div>
         <div class="app-field app-field--narrow">
-          <label class="usa-label" for="r-kind">Resource type</label>
+          <label class="usa-label" for="r-kind">Resource type<span class="app-tip" tabindex="0" role="note" aria-label="Help: resource type">i<span class="app-tip__bubble">Query = a SQL SELECT rendered as a filterable, downloadable table. Volume = browse and download files from a Unity Catalog volume path.</span></span></label>
           <select class="usa-select" id="r-kind" name="kind" data-role="report-kind">
             <option value="query">Query (SQL)</option>
             <option value="volume">Volume (browse files)</option>
@@ -224,7 +224,7 @@
       {# Query builder — hidden by admin.js when Resource type = Volume. #}
       <div data-role="query-section">
       <div class="app-field">
-        <label class="usa-label" for="r-query">Source query (a single SELECT)</label>
+        <label class="usa-label" for="r-query">Source query (a single SELECT)<span class="app-tip" tabindex="0" role="note" aria-label="Help: source query">i<span class="app-tip__bubble">One SELECT statement. The app wraps it as a subquery and adds the configured filters, sorting, and paging — so don't add LIMIT/ORDER BY here. It runs on-behalf-of each user, so they need SELECT on the underlying tables.</span></span></label>
         <textarea class="usa-textarea" id="r-query" name="source_query" rows="4"
                   data-role="report-query" spellcheck="false"
                   placeholder="SELECT * FROM catalog.schema.table"></textarea>
@@ -263,7 +263,7 @@
         </div>
       </div>
       <div class="app-field">
-        <label class="usa-label" for="r-download-group">Download group override (optional)</label>
+        <label class="usa-label" for="r-download-group">Download group override (optional)<span class="app-tip" tabindex="0" role="note" aria-label="Help: download group override">i<span class="app-tip__bubble">Databricks group allowed to download this resource. Leave blank to derive it as the collection key + "{{ dl_suffix }}". System admins can always download regardless.</span></span></label>
         <input class="usa-input" id="r-download-group" name="download_group"
                data-role="download-group" autocomplete="off"
                pattern="[A-Za-z_][A-Za-z0-9_]*">
@@ -298,17 +298,17 @@
     </p>
     <form class="usa-form usa-form--large" id="config-form" data-role="config-form">
       <div class="app-field">
-        <label class="usa-label" for="cfg-disclaimer">Download disclaimer</label>
+        <label class="usa-label" for="cfg-disclaimer">Download disclaimer<span class="app-tip" tabindex="0" role="note" aria-label="Help: download disclaimer">i<span class="app-tip__bubble">The data-handling notice shown in the download modal AND embedded at the top of every exported file. Applies to all resources.</span></span></label>
         <textarea class="usa-textarea" id="cfg-disclaimer" name="disclaimer" rows="8">{{ current_disclaimer }}</textarea>
         <span class="usa-hint">Plain text. Line breaks are preserved in the export.</span>
       </div>
       <div class="app-field app-field--wide">
-        <label class="usa-label" for="cfg-banner">Top banner text</label>
+        <label class="usa-label" for="cfg-banner">Top banner text<span class="app-tip" tabindex="0" role="note" aria-label="Help: top banner text">i<span class="app-tip__bubble">The strip at the very top of every page (e.g. a government or classification notice). Leave blank to hide the banner entirely.</span></span></label>
         <input class="usa-input" id="cfg-banner" name="banner_text" value="{{ current_banner_text }}" autocomplete="off">
         <span class="usa-hint">Shown centered in the bar at the very top of every page. Leave blank to hide the banner entirely.</span>
       </div>
       <div class="app-field app-field--wide">
-        <label class="usa-label" for="cfg-footer">Footer text</label>
+        <label class="usa-label" for="cfg-footer">Footer text<span class="app-tip" tabindex="0" role="note" aria-label="Help: footer text">i<span class="app-tip__bubble">The note centered in the footer of every page. Leave blank for no footer note.</span></span></label>
         <input class="usa-input" id="cfg-footer" name="footer_text" value="{{ current_footer_text }}" autocomplete="off">
         <span class="usa-hint">Shown centered in the footer at the bottom of every page. Leave blank for no footer note.</span>
       </div>

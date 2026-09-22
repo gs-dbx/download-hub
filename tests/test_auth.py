@@ -14,6 +14,7 @@ from app.auth import (
     can_admin_any,
     can_download_group,
     can_view,
+    can_view_report,
     collection_admin_group,
     derive_download_group,
     effective_download_group,
@@ -234,6 +235,24 @@ def test_can_download_group_system_admin_always_allowed():
     r = _report(view_key="efile_ops")
     # Only in the system-admin group, not the report's download group.
     assert can_download_group(_user("sys"), r, system_admin_group="sys") is True
+
+
+def test_can_view_report_group_member():
+    """A member of the report's view group can see it."""
+    r = _report(view_key="efile_ops")
+    assert can_view_report(_user("efile_ops"), r, system_admin_group="sys") is True
+
+
+def test_can_view_report_system_admin_sees_any_collection():
+    """A system admin sees every report even without its view/download group."""
+    r = _report(view_key="new_collection")
+    assert can_view_report(_user("sys"), r, system_admin_group="sys") is True
+
+
+def test_can_view_report_non_member_non_admin_denied():
+    """A non-member who is not a system admin cannot see the report."""
+    r = _report(view_key="new_collection")
+    assert can_view_report(_user("other"), r, system_admin_group="sys") is False
 
 
 def test_group_display_names_tolerates_missing_attrs():

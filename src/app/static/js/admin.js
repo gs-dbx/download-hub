@@ -38,10 +38,49 @@
     });
   });
 
+  // ---- Translucent screen lock (reuses .app-navoverlay) --------------------
+  // A save can wait on the warehouse; a full-page translucent overlay + a button
+  // spinner make the in-flight state impossible to miss (the small status text
+  // next to the button was easy to overlook). Created once, lazily.
+  function lockScreen(on) {
+    var ov = document.getElementById("app-admin-lock");
+    if (!ov) {
+      ov = document.createElement("div");
+      ov.id = "app-admin-lock";
+      ov.className = "app-navoverlay";
+      ov.innerHTML =
+        '<span class="app-spinner__dot" role="status" aria-label="Saving"></span>' +
+        '<span class="app-navoverlay__label">Saving…</span>';
+      document.body.appendChild(ov);
+    }
+    ov.hidden = !on;
+    ov.setAttribute("aria-hidden", on ? "false" : "true");
+  }
+
   // ---- shared: post a form via fetch, show status; optional reload ---------
+  // While the request is in flight the submit button becomes a spinner and the
+  // screen is locked with a translucent overlay; both clear on completion
+  // (except on the reload path, where the overlay stays up until the reload).
   async function postForm(url, form, statusEl, reload) {
+    var btn = form.querySelector('button[type="submit"]');
+    var origBtn = btn ? btn.innerHTML : "";
+    function setBusy(busy) {
+      if (!btn) return;
+      btn.disabled = busy;
+      if (busy) {
+        btn.setAttribute("aria-disabled", "true");
+        btn.innerHTML =
+          '<span class="app-btn-spinner" aria-hidden="true"></span> Saving…';
+      } else {
+        btn.removeAttribute("aria-disabled");
+        btn.innerHTML = origBtn;
+      }
+    }
+    setBusy(true);
+    lockScreen(true);
     statusEl.textContent = "Saving…";
     statusEl.className = "app-admin__status";
+    var willReload = false;
     try {
       var resp = await fetch(url, { method: "POST", body: new FormData(form) });
       var data = {};
@@ -57,6 +96,7 @@
         } else {
           statusEl.textContent = "Saved. Reloading…";
           statusEl.className = "app-admin__status app-admin__status--ok";
+          willReload = true;
           setTimeout(function () {
             window.location.reload();
           }, 500);
@@ -68,6 +108,13 @@
     } catch (err) {
       statusEl.textContent = "Network error — could not reach the server.";
       statusEl.className = "app-admin__status app-admin__status--err";
+    } finally {
+      // On the reload path, keep the overlay + disabled button up until the page
+      // reloads, so the screen never flashes back to an interactive state.
+      if (!willReload) {
+        lockScreen(false);
+        setBusy(false);
+      }
     }
   }
 
@@ -121,12 +168,15 @@
   var viewSel = document.getElementById("r-view");
 
   // Show the derived download group as a hint when the collection changes.
+  // System admins can always download regardless of this group.
   function refreshDownloadHint() {
     var vk = viewSel ? viewSel.value : "";
     if (dlHint) {
-      dlHint.textContent = vk
-        ? "Leave blank to derive: " + vk + dlSuffix
-        : "Leave blank to derive from the collection key.";
+      dlHint.textContent =
+        (vk
+          ? "Leave blank to derive: " + vk + dlSuffix
+          : "Leave blank to derive from the collection key.") +
+        " Members of this group may download; system admins always can.";
     }
   }
   if (viewSel) viewSel.addEventListener("change", refreshDownloadHint);

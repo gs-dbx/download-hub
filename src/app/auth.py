@@ -270,6 +270,35 @@ def can_download_group(
     )
 
 
+def can_view_report(
+    me_user: Any,
+    report: "ReportConfig",
+    suffix: str = DEFAULT_DOWNLOAD_SUFFIX,
+    system_admin_group: str = SYSTEM_ADMIN_GROUP,
+) -> bool:
+    """Return whether the user may SEE a report — group member OR system admin.
+
+    Same as :func:`can_view`, but a system administrator can always see every
+    report (and therefore every resource collection), mirroring
+    :func:`can_download_group`. This keeps a system admin's nav/collection
+    switcher complete even for collections whose view group they don't belong to
+    (data reads still run OBO, so a source they cannot read shows the usual
+    access notice). Pure name-match; the ``me()`` I/O lives in ``main.py``.
+
+    Args:
+        me_user: The ``User`` object from ``current_user.me()``.
+        report: The report config.
+        suffix: The download-group suffix (env-configurable).
+        system_admin_group: The system-admin group display name (env-configurable).
+
+    Returns:
+        ``True`` if the user is a system admin OR can view the report's group.
+    """
+    return is_system_admin(me_user, system_admin_group) or can_view(
+        me_user, report, suffix
+    )
+
+
 def _get_case_insensitive(headers: Any, key: str) -> str | None:
     """Look up ``key`` in a headers-like object, case-insensitively.
 

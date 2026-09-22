@@ -103,7 +103,7 @@
           <label class="usa-label" for="view-key">Collection key (Databricks group)</label>
           <input class="usa-input" id="view-key" name="view_key" required
                  pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
-          <span class="usa-hint">Bare identifier — letters/digits/underscore, no leading digit.</span>
+          <span class="usa-hint">Bare identifier — letters/digits/underscore, no leading digit. <strong>This value is also the Databricks group that grants access:</strong> only members of this group (or system admins) will see this collection and its resources. Create the matching group and add users, or the collection stays hidden from them.</span>
         </div>
         <div class="app-field">
           <label class="usa-label" for="view-title">Title (shown in collection switcher)</label>
@@ -201,6 +201,7 @@
             <option value="{{ v.view_key }}">{{ v.title }} ({{ v.view_key }})</option>
             {% endfor %}
           </select>
+          <span class="usa-hint">Users must belong to this collection's group (its key) to see the resource; system admins see all.</span>
         </div>
         <div class="app-field app-field--narrow">
           <label class="usa-label" for="r-kind">Resource type</label>

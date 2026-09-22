@@ -325,13 +325,21 @@
   // (c) render the server's specific error message in the modal rather than a
   // full-page error. All same-origin, no external asset (air-gap safe).
   var dlForm = document.getElementById("download-form");
-  var dlSubmit = byRole("download-submit");
-  var dlError = byRole("download-error");
-  var dlErrorText = byRole("download-error-text");
-
-  var dlStatus = byRole("download-status");
-  var dlStatusText = byRole("download-status-text");
-  var dlReadyLink = byRole("download-ready-link");
+  // The download modal is a USWDS modal, which RELOCATES itself to the end of
+  // <body> on init — OUTSIDE the [data-report-id] container. So its controls must
+  // be looked up by the modal's own id (global), NOT via byRole() (which is
+  // scoped to the container): otherwise every feedback element is null and the
+  // button appears to do nothing. Node references survive the relocation.
+  var dlModal = document.getElementById("download-modal");
+  function dlByRole(role) {
+    return dlModal ? dlModal.querySelector('[data-role="' + role + '"]') : null;
+  }
+  var dlSubmit = dlByRole("download-submit");
+  var dlError = dlByRole("download-error");
+  var dlErrorText = dlByRole("download-error-text");
+  var dlStatus = dlByRole("download-status");
+  var dlStatusText = dlByRole("download-status-text");
+  var dlReadyLink = dlByRole("download-ready-link");
   var dlPollTimer = null;
 
   // Keep the button's loading state on-screen for a minimum time so a fast/small
@@ -632,12 +640,20 @@
   var vCrumbs = vByRole("volume-breadcrumbs");
   var vSpinner = vByRole("volume-spinner");
   var vWrap = vByRole("volume-table-wrap");
-  var vPathInput = vByRole("volume-path");
-  var vNameOut = vByRole("volume-download-name");
-  var vForm = vByRole("volume-download-form");
-  var vSubmit = vByRole("volume-download-submit");
-  var vError = vByRole("volume-download-error");
-  var vErrorText = vByRole("volume-download-error-text");
+  // The volume download modal is a USWDS modal, relocated to <body> on init —
+  // OUTSIDE vRoot. Look its controls up by the modal id (global), not via
+  // vByRole (vRoot-scoped), or the form handler never binds and the button does
+  // nothing. The listing controls above stay inside vRoot.
+  var vModal = document.getElementById("volume-download-modal");
+  function vModalByRole(role) {
+    return vModal ? vModal.querySelector('[data-role="' + role + '"]') : null;
+  }
+  var vPathInput = vModalByRole("volume-path");
+  var vNameOut = vModalByRole("volume-download-name");
+  var vForm = vModalByRole("volume-download-form");
+  var vSubmit = vModalByRole("volume-download-submit");
+  var vError = vModalByRole("volume-download-error");
+  var vErrorText = vModalByRole("volume-download-error-text");
 
   var currentPath = vRoot.getAttribute("data-volume-current-path") || "";
 

@@ -60,6 +60,7 @@ from auth import (
     can_admin_any,
     can_download_group,
     can_view,
+    can_view_report,
     effective_download_group,
     effective_view_group,
     extract_user_email,
@@ -884,7 +885,14 @@ def _visible_reports(
     """
     if me_user is None:
         return []
-    return [c for c in configs if can_view(me_user, c, _DL_SUFFIX)]
+    # System admins see every collection/report (mirrors can_download_group), so
+    # their nav + collection switcher is complete even for collections whose view
+    # group they don't belong to; data reads still run OBO.
+    return [
+        c
+        for c in configs
+        if can_view_report(me_user, c, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP)
+    ]
 
 
 def _views_for_user(
@@ -1883,7 +1891,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     # Visibility re-check (defense in depth): the caller must belong to the
     # resource's collection access group or download group.
     me_user = await _me(token)
-    if me_user is None or not can_view(me_user, report, _DL_SUFFIX):
+    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
         return HTMLResponse(
             f'<tr><td colspan="{colspan}">You do not have access to this report.</td></tr>',
             status_code=403,
@@ -1995,7 +2003,7 @@ async def report_sql(request: Request, report_id: str) -> Response:
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     me_user = await _me(token)
-    if me_user is None or not can_view(me_user, report, _DL_SUFFIX):
+    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
         raise HTTPException(status_code=403, detail="You do not have access to this report.")
 
     # Rebuild the view's query WITH the active filters (unlike the snapshot read,
@@ -2728,7 +2736,7 @@ async def volume_list(request: Request, report_id: str) -> HTMLResponse:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     me_user = await _me(token)
-    if me_user is None or not can_view(me_user, report, _DL_SUFFIX):
+    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
         raise HTTPException(status_code=403, detail="You do not have access to this report.")
 
     subpath = request.query_params.get("path", "") or ""

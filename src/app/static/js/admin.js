@@ -11,7 +11,6 @@
 
   var root = document.querySelector(".app-admin");
   if (!root) return;
-  var dlSuffix = root.getAttribute("data-dl-suffix") || "_dl";
 
   function byRole(role, ctx) {
     return (ctx || document).querySelector('[data-role="' + role + '"]');
@@ -163,23 +162,7 @@
   var columnsBody = byRole("columns-body");
   var orderSel = byRole("order-by");
   var queryStatus = byRole("query-status");
-  var dlGroupInput = byRole("download-group");
-  var dlHint = byRole("download-hint");
   var viewSel = document.getElementById("r-view");
-
-  // Show the derived download group as a hint when the collection changes.
-  // System admins can always download regardless of this group.
-  function refreshDownloadHint() {
-    var vk = viewSel ? viewSel.value : "";
-    if (dlHint) {
-      dlHint.textContent =
-        (vk
-          ? "Leave blank to derive: " + vk + dlSuffix
-          : "Leave blank to derive from the collection key.") +
-        " Members of this group may download; system admins always can.";
-    }
-  }
-  if (viewSel) viewSel.addEventListener("change", refreshDownloadHint);
 
   // Report type: query reports use the SQL builder; volume reports use a single
   // volume_root field. Toggle which section shows.
@@ -338,12 +321,10 @@
     byRole("report-query").value = btn.getAttribute("data-source-query") || "";
     document.getElementById("r-order").value = btn.getAttribute("data-display-order") || "1";
     document.getElementById("r-enabled").checked = btn.getAttribute("data-enabled") === "true";
-    if (dlGroupInput) dlGroupInput.value = btn.getAttribute("data-download-group") || "";
     if (viewSel) viewSel.value = btn.getAttribute("data-view-key") || "";
     if (kindSel) kindSel.value = btn.getAttribute("data-kind") || "query";
     if (volumeRootInput) volumeRootInput.value = btn.getAttribute("data-volume-root") || "";
     applyKind();
-    refreshDownloadHint();
 
     var cols = [];
     var presetByName = {};
@@ -391,9 +372,6 @@
       columnsWrap.hidden = true;
       queryStatus.textContent = "";
       applyKind();
-      refreshDownloadHint();
     });
   }
-
-  refreshDownloadHint();
 })();

@@ -90,7 +90,6 @@ _SEED_ROW = {
     "order_by": "sort_order",
     "display_order": 1,
     "enabled": True,
-    "download_group": None,
 }
 
 
@@ -108,7 +107,6 @@ def test_parse_report_config_parses_seed_row():
     assert rc.order_by == "sort_order"
     assert rc.display_order == 1
     assert rc.enabled is True
-    assert rc.download_group is None
     assert len(rc.columns) == 4
     assert all(isinstance(c, ColumnSpec) for c in rc.columns)
     assert [c.name for c in rc.columns] == [

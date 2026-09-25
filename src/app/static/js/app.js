@@ -55,7 +55,53 @@
   if (whBadge) {
     var whDot = whBadge.querySelector('[data-role="wh-dot"]');
     var whText = whBadge.querySelector('[data-role="wh-text"]');
-    var pollWarehouse = function () {
+    // Cold-start overlay: when the warehouse is not running on arrival, reveal a
+    // spinner, ask the server to start it, and poll fast until it's running.
+    var whOverlay = document.querySelector('[data-role="wh-overlay"]');
+    var whOverlayLabel = whOverlay
+      ? whOverlay.querySelector('[data-role="wh-overlay-label"]')
+      : null;
+    var whOverlayDismiss = whOverlay
+      ? whOverlay.querySelector('[data-role="wh-overlay-dismiss"]')
+      : null;
+    var whDismissed = false; // user chose "Continue anyway" — never re-show
+    var whStartRequested = false; // POST /start at most once per page
+    var whTimer = null;
+    var whWaitStartedAt = 0;
+    var WH_MAX_WAIT_MS = 180000; // 3-min cap so the overlay can never linger
+
+    function hideWhOverlay() {
+      if (whOverlay) {
+        whOverlay.hidden = true;
+        whOverlay.setAttribute("aria-hidden", "true");
+      }
+    }
+    function showWhOverlay(msg) {
+      if (!whOverlay || whDismissed) return;
+      if (whOverlayLabel && msg) whOverlayLabel.textContent = msg;
+      whOverlay.hidden = false;
+      whOverlay.setAttribute("aria-hidden", "false");
+    }
+    if (whOverlayDismiss)
+      whOverlayDismiss.addEventListener("click", function () {
+        whDismissed = true;
+        hideWhOverlay();
+      });
+
+    function requestWarehouseStart() {
+      if (whStartRequested) return;
+      whStartRequested = true;
+      // Fire-and-forget; the server best-effort starts the warehouse and we keep
+      // polling /health/warehouse for the running state.
+      fetch("/health/warehouse/start", { method: "POST" }).catch(function () {});
+    }
+
+    function scheduleWarehousePoll(delay) {
+      if (whTimer) clearTimeout(whTimer);
+      whTimer = setTimeout(pollWarehouse, delay);
+    }
+
+    function pollWarehouse() {
       fetch("/health/warehouse", { headers: { Accept: "application/json" } })
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -63,14 +109,33 @@
           if (whDot) whDot.className = "app-whstatus__dot app-whstatus__dot--" + status;
           if (whText) whText.textContent = (d && d.label) || "Warehouse status unknown";
           whBadge.setAttribute("data-status", status);
+          if (status === "running" || status === "unknown") {
+            hideWhOverlay();
+            whWaitStartedAt = 0;
+            scheduleWarehousePoll(30000); // steady-state re-check
+            return;
+          }
+          // stopped or starting — not ready. Show the overlay and, if it's fully
+          // stopped, ask the server to start it. Poll fast until it's running.
+          if (!whWaitStartedAt) whWaitStartedAt = Date.now();
+          if (status === "stopped") requestWarehouseStart();
+          if (Date.now() - whWaitStartedAt > WH_MAX_WAIT_MS) {
+            // Stop blocking after the cap; the badge still shows the live status.
+            hideWhOverlay();
+            scheduleWarehousePoll(30000);
+            return;
+          }
+          showWhOverlay("The SQL warehouse is starting. This can take up to a minute…");
+          scheduleWarehousePoll(3000);
         })
         .catch(function () {
           if (whDot) whDot.className = "app-whstatus__dot app-whstatus__dot--unknown";
           if (whText) whText.textContent = "Warehouse status unavailable";
+          hideWhOverlay();
+          scheduleWarehousePoll(30000);
         });
-    };
+    }
     pollWarehouse();
-    setInterval(pollWarehouse, 30000); // re-check every 30s
   }
 
   // ---- Navigation overlay (global) — instant feedback on internal links -----
@@ -80,9 +145,23 @@
   // from the bfcache (pageshow).
   var navOverlay = document.querySelector('[data-role="nav-overlay"]');
   if (navOverlay) {
+    var _navSafetyTimer = null;
+    var hideNav = function () {
+      navOverlay.hidden = true;
+      navOverlay.setAttribute("aria-hidden", "true");
+      if (_navSafetyTimer) {
+        clearTimeout(_navSafetyTimer);
+        _navSafetyTimer = null;
+      }
+    };
     var showNav = function () {
       navOverlay.hidden = false;
       navOverlay.setAttribute("aria-hidden", "false");
+      // Safety net: a real navigation replaces the page (overlay goes with it),
+      // but if the click never actually navigates the overlay must not linger.
+      // Cap it so it can never spin forever.
+      if (_navSafetyTimer) clearTimeout(_navSafetyTimer);
+      _navSafetyTimer = setTimeout(hideNav, 30000);
     };
     document.addEventListener("click", function (e) {
       var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
@@ -96,14 +175,19 @@
         a.getAttribute("aria-controls") ||
         href.charAt(0) === "#" ||
         href.indexOf("/") !== 0 || // only same-origin absolute paths
+        href.indexOf("/download/retrieve") === 0 || // file download, never navigates
         e.metaKey || e.ctrlKey || e.shiftKey || e.altKey
       )
         return;
       showNav();
     });
-    window.addEventListener("pageshow", function () {
-      navOverlay.hidden = true;
-      navOverlay.setAttribute("aria-hidden", "true");
+    // Hide on bfcache restore AND when the tab regains focus/visibility — a
+    // download that briefly steals focus (save dialog) returns here so a stray
+    // overlay is cleared instead of spinning.
+    window.addEventListener("pageshow", hideNav);
+    window.addEventListener("focus", hideNav);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) hideNav();
     });
   }
 
@@ -445,7 +529,10 @@
           '<span class="app-btn-spinner" aria-hidden="true"></span> Preparing download…';
         _dlBtnShownAt = Date.now();
       }
-      showSpinner();
+      // NOTE: do NOT show the report-table "Running query…" spinner here. The
+      // modal covers the table, and the button spinner + status panel below are
+      // the correct feedback; showing the table scrim only flashes a spurious
+      // "Running query…" behind the modal on every download click.
       try {
         var resp = await fetch(dlForm.action, {
           method: "POST",
@@ -479,7 +566,6 @@
             "connection and try again."
         );
       } finally {
-        hideSpinner();
         if (dlSubmit) {
           // Restore only after the loading state has been visible for a minimum
           // time, so a near-instant export doesn't flash by unnoticed. The button
@@ -935,6 +1021,9 @@
         var a = document.createElement("a");
         a.className = "usa-button usa-button--outline";
         a.href = href;
+        // Mark as a download so the global nav-overlay click handler ignores it
+        // (a file download never navigates, so the overlay would spin forever).
+        a.setAttribute("download", "");
         a.textContent = "Download";
         actionCell.innerHTML = "";
         actionCell.appendChild(a);

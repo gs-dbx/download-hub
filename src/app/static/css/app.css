@@ -60,7 +60,8 @@ body {
   display: block;
 }
 
-/* App name sits to the right of the logo, separated by a thin rule. */
+/* App name sits to the right of the logo, separated by a thin rule. It is a
+   Home link, but reads as the wordmark: no underline, inherits the navy color. */
 .app-header__app {
   font-size: 1.05rem;
   font-weight: 600;
@@ -68,6 +69,12 @@ body {
   padding-left: 1rem;
   border-left: 1px solid var(--app-border);
   line-height: 1.2;
+  text-decoration: none;
+}
+.app-header__app:hover,
+.app-header__app:focus {
+  text-decoration: underline;
+  color: var(--app-navy);
 }
 
 /* ---- Hero title ---- */
@@ -437,6 +444,20 @@ body {
   cursor: progress;
 }
 
+/* Ready-state actions in the download modal: the primary Download link + the
+   secondary "Go to My downloads" outline link on one wrapping row, so the
+   secondary action reads as a navy button rather than a stray purple text link.
+   Each button drops its default top margin (the row owns the spacing). */
+.app-dl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.app-dl-actions .usa-button {
+  margin: 0;
+}
+
 /* ---- Copy/paste deterrent: no text selection except in form controls ---- */
 body {
   -webkit-user-select: none;
@@ -712,6 +733,24 @@ select,
   font-weight: 600;
   color: var(--app-navy);
 }
+
+/* ---- Full-page warehouse cold-start overlay ---- */
+/* Same full-page treatment as the nav overlay, plus room for the dismiss button.
+   Shown by app.js while a serverless warehouse is starting on first visit. */
+.app-whoverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 1rem;
+  text-align: center;
+  background-color: rgba(255, 255, 255, 0.85);
+}
+.app-whoverlay[hidden] { display: none; }
 
 /* ---- Table-head strip: subtle SQL button, right-aligned ---- */
 .app-sqlbtn {

@@ -15,7 +15,7 @@
   previews a query via /admin/preview. Tab switching + form wiring live in
   /static/js/admin.js via the data-role/data-tab hooks below.
 #}
-<div class="app-admin" data-dl-suffix="{{ dl_suffix }}">
+<div class="app-admin">
   <p class="app-back">
     <a class="usa-button usa-button--outline usa-button--small" href="/">
       <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
@@ -53,8 +53,8 @@
     <p class="font-body-sm text-base measure-5">
       A <strong>resource collection</strong> is a set of resources. Its <strong>collection key</strong> is the Databricks group that
       grants access; its <strong>title</strong> shows in the collection switcher. Share <code>/collection/&lt;key&gt;</code>
-      to link directly to it. The download group is derived as
-      <code>&lt;key&gt;{{ dl_suffix }}</code> unless a resource overrides it. The
+      to link directly to it. Every member of the access group can view and
+      download the collection's resources. The
       <strong>admin group</strong> names the delegated admins who may edit only
       this collection's resources (leave blank for system-admin-only).
     </p>
@@ -161,7 +161,7 @@
                         data-source-query="{{ r.source_query }}"
                         data-order-by="{{ r.order_by }}" data-display-order="{{ r.display_order }}"
                         data-enabled="{{ 'true' if r.enabled else 'false' }}"
-                        data-download-group="{{ r.download_group }}" data-view-key="{{ r.view_key }}"
+                        data-view-key="{{ r.view_key }}"
                         data-columns-json="{{ r.columns_json }}" data-filters-json="{{ r.filters_json }}">Edit</button>
                 {# Delete is a self-contained POST (works without admin.js): native
                    confirm guards the destructive action. Route redirects to /admin. #}
@@ -261,13 +261,6 @@
           <label class="usa-label" for="r-order">Display order</label>
           <input class="usa-input" id="r-order" name="display_order" type="number" value="1" min="1">
         </div>
-      </div>
-      <div class="app-field">
-        <label class="usa-label" for="r-download-group">Download group override (optional)<span class="app-tip" tabindex="0" role="note" aria-label="Help: download group override">i<span class="app-tip__bubble">Databricks group allowed to download this resource. Leave blank to derive it as the collection key + "{{ dl_suffix }}". System admins can always download regardless.</span></span></label>
-        <input class="usa-input" id="r-download-group" name="download_group"
-               data-role="download-group" autocomplete="off"
-               pattern="[A-Za-z_][A-Za-z0-9_]*">
-        <span class="usa-hint" data-role="download-hint">Leave blank to derive from the collection key.</span>
       </div>
       <div class="usa-checkbox">
         <input class="usa-checkbox__input" id="r-enabled" name="enabled" type="checkbox" value="true" checked>

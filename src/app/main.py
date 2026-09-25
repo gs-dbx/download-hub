@@ -56,12 +56,8 @@ from fastapi.templating import Jinja2Templates
 from audit import build_audit_insert, build_audit_row
 from auth import (
     ADMIN_GROUP,
-    DEFAULT_DOWNLOAD_SUFFIX,
     can_admin_any,
-    can_download_group,
-    can_view,
     can_view_report,
-    effective_download_group,
     effective_view_group,
     extract_user_email,
     extract_user_token,
@@ -186,9 +182,8 @@ _DISCLAIMER = resolve_disclaimer(os.environ.get("DOWNLOAD_DISCLAIMER"), DEFAULT_
 # Kept as raw values (may be None) so "unset" is distinguishable from "set-empty".
 _BANNER_TEXT_ENV = os.environ.get("APP_BANNER_TEXT")
 _FOOTER_TEXT_ENV = os.environ.get("APP_FOOTER_TEXT")
-# Admin group + download-group naming suffix (env-overridable; see auth.py).
+# Admin group (env-overridable; see auth.py).
 _ADMIN_GROUP = (os.environ.get("ADMIN_GROUP") or "").strip() or ADMIN_GROUP
-_DL_SUFFIX = (os.environ.get("DOWNLOAD_GROUP_SUFFIX") or "").strip() or DEFAULT_DOWNLOAD_SUFFIX
 # App-wide ("system") admin group. Members administer EVERY resource collection
 # and the collection->admin-group mapping. Defaults to _ADMIN_GROUP so a
 # single-tier install keeps working (its one admin group becomes the system
@@ -885,13 +880,13 @@ def _visible_reports(
     """
     if me_user is None:
         return []
-    # System admins see every collection/report (mirrors can_download_group), so
+    # System admins see every collection/report (mirrors can_view_report), so
     # their nav + collection switcher is complete even for collections whose view
     # group they don't belong to; data reads still run OBO.
     return [
         c
         for c in configs
-        if can_view_report(me_user, c, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP)
+        if can_view_report(me_user, c, _SYSTEM_ADMIN_GROUP)
     ]
 
 
@@ -1133,24 +1128,25 @@ async def _report_filter_options(
 def _resolve_can_download(me_user, report: ReportConfig) -> bool:
     """Return whether the download button should be shown for a report.
 
-    Gated by the global kill switch AND :func:`auth.can_download_group` — a member
-    of the report's effective download group OR a system administrator (system
-    admins may always download, regardless of group). Pure over an
-    already-resolved ``me()`` object (no extra I/O); ``None`` -> ``False``.
+    Every user who can access a report may download it: this is gated by the
+    global kill switch AND :func:`auth.can_view_report` (a member of the report's
+    access group OR a system administrator). There is no separate download group.
+    Pure over an already-resolved ``me()`` object (no extra I/O); ``None`` ->
+    ``False``.
 
     Args:
         me_user: The user's ``me()`` object (or ``None``).
         report: The active report.
 
     Returns:
-        ``True`` only if downloads are enabled and the user is a system admin or a
-        member of the report's effective download group; ``False`` otherwise.
+        ``True`` only if downloads are enabled and the user may access the report
+        (group member or system admin); ``False`` otherwise.
     """
     if not downloads_enabled(os.environ.get("DOWNLOADS_ENABLED")):
         return False
     if me_user is None:
         return False
-    return can_download_group(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP)
+    return can_view_report(me_user, report, _SYSTEM_ADMIN_GROUP)
 
 
 # ---------------------------------------------------------------------------
@@ -1498,6 +1494,45 @@ async def warehouse_health() -> dict:
     if raw in ("STOPPED", "STOPPING", "DELETED", "DELETING"):
         return {"state": raw, "status": "stopped", "label": "Warehouse offline (first query will start it)"}
     return {"state": raw, "status": "unknown", "label": f"Warehouse: {raw.title()}"}
+
+
+@app.post("/health/warehouse/start")
+async def warehouse_start() -> dict:
+    """Best-effort start of the app's SQL warehouse, then report its state.
+
+    Serverless warehouses auto-suspend; when the UI finds the warehouse stopped
+    on first visit it calls this so the "warehouse is starting" spinner is
+    truthful and self-terminating (rather than waiting on an idle warehouse that
+    nothing is starting). Tries the explicit ``warehouses.start`` first; if the
+    app service principal lacks the manage permission, it falls back to a
+    fire-and-forget ``SELECT 1`` (``wait_timeout='0s'``) which auto-starts the
+    warehouse with only CAN_USE. Never raises — the UI just keeps polling
+    ``/health/warehouse``.
+
+    Returns:
+        The same payload as :func:`warehouse_health` (current state after the
+        start was requested).
+    """
+    wid = (os.environ.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
+    if not wid:
+        return {"state": "UNSET", "status": "unknown", "label": "Warehouse not configured"}
+    sp = _app_sp_client()
+    try:
+        # start() initiates the transition and returns a waiter; we do NOT block
+        # on it — the UI polls /health/warehouse for the running state.
+        await asyncio.to_thread(sp.warehouses.start, wid)
+    except Exception as exc:  # noqa: BLE001 - fall back to an auto-start query
+        print(f"[download-hub] warehouse start via API failed ({exc}); trying SELECT 1")
+        try:
+            await asyncio.to_thread(
+                sp.statement_execution.execute_statement,
+                warehouse_id=wid,
+                statement="SELECT 1",
+                wait_timeout="0s",
+            )
+        except Exception as exc2:  # noqa: BLE001 - never break the page
+            print(f"[download-hub] warehouse auto-start query failed: {exc2}")
+    return await warehouse_health()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1891,7 +1926,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     # Visibility re-check (defense in depth): the caller must belong to the
     # resource's collection access group or download group.
     me_user = await _me(token)
-    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
+    if me_user is None or not can_view_report(me_user, report, _SYSTEM_ADMIN_GROUP):
         return HTMLResponse(
             f'<tr><td colspan="{colspan}">You do not have access to this report.</td></tr>',
             status_code=403,
@@ -2003,7 +2038,7 @@ async def report_sql(request: Request, report_id: str) -> Response:
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     me_user = await _me(token)
-    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
+    if me_user is None or not can_view_report(me_user, report, _SYSTEM_ADMIN_GROUP):
         raise HTTPException(status_code=403, detail="You do not have access to this report.")
 
     # Rebuild the view's query WITH the active filters (unlike the snapshot read,
@@ -2239,11 +2274,12 @@ async def download(request: Request) -> Response:
             detail="The requested report is unavailable or has been disabled.",
         )
 
-    # 3) Server-side re-check: a system admin OR a member of the report's
-    # effective download group. Defense in depth; never fail open.
+    # 3) Server-side re-check: any user who can access the report may download it
+    # (system admin OR member of the report's access group). Defense in depth;
+    # never fail open.
     me_user = await _me(token)
-    if me_user is None or not can_download_group(
-        me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP
+    if me_user is None or not can_view_report(
+        me_user, report, _SYSTEM_ADMIN_GROUP
     ):
         raise HTTPException(
             status_code=403,
@@ -2736,7 +2772,7 @@ async def volume_list(request: Request, report_id: str) -> HTMLResponse:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     me_user = await _me(token)
-    if me_user is None or not can_view_report(me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP):
+    if me_user is None or not can_view_report(me_user, report, _SYSTEM_ADMIN_GROUP):
         raise HTTPException(status_code=403, detail="You do not have access to this report.")
 
     subpath = request.query_params.get("path", "") or ""
@@ -2765,7 +2801,7 @@ async def volume_download(request: Request, report_id: str) -> Response:
 
     Flow mirrors ``POST /download`` (audit-first): validate OBO token (401) ->
     kill switch (403) -> resolve volume report (404/400) -> re-check the report's
-    effective download group (403) -> acknowledgement + justification (400) ->
+    access group (403) -> acknowledgement + justification (400) ->
     resolve+jail the file path (400 on escape) -> read the bytes OBO -> write
     exactly one audit row as the app SP (500 if it fails, no file) -> return the
     attachment. The audit row records the file's root-relative path (in the
@@ -2782,11 +2818,11 @@ async def volume_download(request: Request, report_id: str) -> Response:
 
     report = await _resolve_volume_report(report_id)
 
-    # System admins may always download; everyone else must be in the report's
-    # download group (see auth.can_download_group).
+    # Any user who can access the report may download it (system admin OR member
+    # of the report's access group — see auth.can_view_report).
     me_user = await _me(token)
-    if me_user is None or not can_download_group(
-        me_user, report, _DL_SUFFIX, _SYSTEM_ADMIN_GROUP
+    if me_user is None or not can_view_report(
+        me_user, report, _SYSTEM_ADMIN_GROUP
     ):
         raise HTTPException(
             status_code=403, detail="You are not authorized to download this file."
@@ -3090,7 +3126,6 @@ async def admin_page(request: Request) -> Response:
             "order_by": c.order_by or "",
             "display_order": c.display_order,
             "enabled": c.enabled,
-            "download_group": c.download_group or "",
             "view_key": c.view_key or "",
             "columns_json": json.dumps(
                 [{"name": col.name, "label": col.label, "format": col.format} for col in c.columns]
@@ -3098,7 +3133,6 @@ async def admin_page(request: Request) -> Response:
             "filters_json": json.dumps(
                 [{"field": f.field, "label": f.label} for f in c.filters]
             ),
-            "effective_download_group": effective_download_group(c, _DL_SUFFIX),
         }
         for c in configs
         # Collection admins only see/edit reports in collections they administer;
@@ -3113,7 +3147,6 @@ async def admin_page(request: Request) -> Response:
             "active_report_id": "",
             "reports": reports_admin,
             "views": views_admin,
-            "dl_suffix": _DL_SUFFIX,
             "current_disclaimer": current_disclaimer,
             "current_banner_text": current_banner_text,
             "current_footer_text": current_footer_text,
@@ -3180,7 +3213,7 @@ async def admin_save_report(request: Request) -> Response:
         request: The incoming request; form carries the full report row
             (``report_id``, ``title``, ``source_query``,
             ``columns_json``, ``filters_json``, ``order_by``, ``display_order``,
-            ``enabled``, ``download_group``, ``view_key``).
+            ``enabled``, ``view_key``).
 
     Returns:
         A JSON ``{"ok": true}`` on success, or ``{"error": "..."}`` (400 invalid
@@ -3214,7 +3247,10 @@ async def admin_save_report(request: Request) -> Response:
         "display_order": str(form.get("display_order", "1")),
         "enabled": str(form.get("enabled", "true")).strip().lower()
         in {"true", "on", "1", "yes"},
-        "download_group": str(form.get("download_group", "")).strip(),
+        # Retain the registry column for schema compatibility, but retire the
+        # separate download group: every user who can access a report may download
+        # it (see auth.can_view_report), so the column is always written empty.
+        "download_group": "",
         "view_key": target_view_key,
         "updated_by": email,
     }

@@ -2,16 +2,16 @@
 --
 -- ACCESS MODEL (see docs/PERMISSIONS.md):
 --   * A report belongs to a VIEW, keyed by `view_key` — which is ALSO the
---     Databricks group that grants VIEW access. A user SEES a report if they are
---     a member of its view group OR its download group.
---   * A report's DOWNLOAD group is the explicit `download_group`, else it is
---     derived as `<view_key>` + DOWNLOAD_GROUP_SUFFIX (default `_dl`).
+--     Databricks group that grants ACCESS. A user SEES a report if they are a
+--     member of its access group. There is NO separate download tier: every user
+--     who can view a report may also download it (subject to the global download
+--     kill switch). System admins can access/download every report.
 --   * ADMINS are members of `download_hub_admin_users` (env ADMIN_GROUP). Admin
 --     WRITES run as the app SERVICE PRINCIPAL, so admins need NO direct UC grant
 --     on the registry — group membership alone gates the /admin console.
 --
 -- WHO NEEDS WHAT
---   * View + download group members READ report DATA on-behalf-of themselves
+--   * Access group members READ report DATA on-behalf-of themselves
 --     (OBO), so each such group needs USE CATALOG/SCHEMA + SELECT on the tables
 --     that its reports' `source_query` reads. Repeat the block below per view.
 --   * The app SERVICE PRINCIPAL reads the registry tables and writes the audit +

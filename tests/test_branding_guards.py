@@ -74,7 +74,7 @@ def test_overlay_components_honor_hidden_attribute():
     """
     css = _read_text(_REPO_ROOT / "src" / "app" / "static" / "css" / "app.css")
     assert css is not None, "app.css not found"
-    for component in (".app-spinner", ".app-navoverlay", ".app-field"):
+    for component in (".app-spinner", ".app-navoverlay", ".app-whoverlay", ".app-field"):
         assert re.search(
             re.escape(component) + r"\[hidden\]\s*\{[^}]*display:\s*none", css
         ), f"missing `{component}[hidden] {{ display: none }}` guard rule"

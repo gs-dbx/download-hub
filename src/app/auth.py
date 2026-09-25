@@ -47,16 +47,10 @@ def parse_scim_user_id(value: str) -> str | None:
     return m.group(1) if m else None
 
 # Generic default Databricks group used as the ultimate fallback for a report's
-# view group when it has neither a ``view_key`` nor an explicit
-# ``download_group``. In normal operation every report names a ``view_key``, so
-# this is only a defensive fallback. Membership is re-checked server-side.
-DOWNLOAD_GROUP: str = "download_hub_download_users"
-
-# Default suffix appended to a report's ``view_key`` to derive its download
-# group when no explicit ``download_group`` is set (e.g. view_key ``efile_ops``
-# -> download group ``efile_ops_dl``). Overridable via the ``DOWNLOAD_GROUP_SUFFIX``
-# env var, read in ``main.py`` and passed through.
-DEFAULT_DOWNLOAD_SUFFIX: str = "_dl"
+# view group when it has no ``view_key``. In normal operation every report names
+# a ``view_key``, so this is only a defensive fallback. Membership is re-checked
+# server-side.
+DEFAULT_VIEW_GROUP: str = "download_hub_download_users"
 
 # Default admin group whose members may use the report/view admin console. The
 # name is overridable via the ``ADMIN_GROUP`` env var (read in ``main.py``).
@@ -64,80 +58,40 @@ ADMIN_GROUP: str = "download_hub_admin_users"
 
 
 def effective_view_group(report: "ReportConfig") -> str:
-    """Return the Databricks group that grants VIEW access to a report.
+    """Return the Databricks group that grants access to a report.
 
-    The view group is the report's ``view_key`` (the key doubles as the group).
-    Falls back to :data:`DOWNLOAD_GROUP` only when ``view_key`` is unset (which
-    should not happen for a well-formed report).
+    The access group is the report's ``view_key`` (the key doubles as the group).
+    Falls back to :data:`DEFAULT_VIEW_GROUP` only when ``view_key`` is unset
+    (which should not happen for a well-formed report). This single group governs
+    BOTH viewing and downloading — there is no separate download tier.
 
     Args:
         report: The report config (only its ``view_key`` is read).
 
     Returns:
         The report's ``view_key`` (stripped) if non-empty, else
-        :data:`DOWNLOAD_GROUP`.
+        :data:`DEFAULT_VIEW_GROUP`.
     """
-    return (getattr(report, "view_key", None) or "").strip() or DOWNLOAD_GROUP
+    return (getattr(report, "view_key", None) or "").strip() or DEFAULT_VIEW_GROUP
 
 
-def derive_download_group(view_key: str, suffix: str = DEFAULT_DOWNLOAD_SUFFIX) -> str:
-    """Return the download group derived from a view key by naming convention.
+def can_view(me_user: Any, report: "ReportConfig") -> bool:
+    """Return whether the user may SEE (and therefore download) a report.
 
-    Args:
-        view_key: The report's view key / view group (a bare identifier).
-        suffix: The suffix to append (e.g. ``"_dl"``).
-
-    Returns:
-        ``f"{view_key}{suffix}"``.
-    """
-    return f"{view_key}{suffix}"
-
-
-def effective_download_group(
-    report: "ReportConfig", suffix: str = DEFAULT_DOWNLOAD_SUFFIX
-) -> str:
-    """Return the group whose members may DOWNLOAD a report.
-
-    Uses the explicit ``download_group`` when set (stripped, non-empty); else
-    derives it from the report's view group + ``suffix`` (LOCKED naming
-    convention). Used by BOTH the button-visibility gate and the server-side
-    ``POST /download`` enforcement.
-
-    Args:
-        report: The active report config.
-        suffix: The download-group suffix (env-configurable).
-
-    Returns:
-        The effective download group name.
-    """
-    explicit = (getattr(report, "download_group", None) or "").strip()
-    if explicit:
-        return explicit
-    return derive_download_group(effective_view_group(report), suffix)
-
-
-def can_view(
-    me_user: Any, report: "ReportConfig", suffix: str = DEFAULT_DOWNLOAD_SUFFIX
-) -> bool:
-    """Return whether the user may SEE a report's tab.
-
-    A user sees a report if they belong to its view group OR its download group
-    (so download-group members always see what they can export).
+    A user has access iff they belong to the report's access group
+    (:func:`effective_view_group`). There is no separate "read-only" tier: any
+    user who can see a report may also download it (subject to the global
+    download kill switch, layered on in ``main.py``).
 
     Args:
         me_user: The ``User`` object from ``current_user.me()``.
         report: The report config.
-        suffix: The download-group suffix (env-configurable).
 
     Returns:
-        ``True`` if the user is a member of the report's view group or download
-        group; ``False`` otherwise.
+        ``True`` if the user is a member of the report's access group; ``False``
+        otherwise.
     """
-    names = group_display_names(me_user)
-    return (
-        effective_view_group(report) in names
-        or effective_download_group(report, suffix) in names
-    )
+    return effective_view_group(report) in group_display_names(me_user)
 
 
 def is_admin(me_user: Any, admin_group: str = ADMIN_GROUP) -> bool:
@@ -237,66 +191,32 @@ def can_admin_any(
     return any(is_collection_admin(me_user, v) for v in (views or ()))
 
 
-def can_download_group(
-    me_user: Any,
-    report: "ReportConfig",
-    suffix: str = DEFAULT_DOWNLOAD_SUFFIX,
-    system_admin_group: str = SYSTEM_ADMIN_GROUP,
-) -> bool:
-    """Return whether the user may DOWNLOAD a report, group-wise.
-
-    A system administrator may ALWAYS download, regardless of the report's
-    download group (they administer every collection, so withholding the export
-    entitlement from them is never intended). Everyone else must belong to the
-    report's effective download group.
-
-    This is the group-membership decision only; the global download kill switch
-    (``config.downloads_enabled``) is layered on top by the caller in ``main.py``
-    and applies to system admins too. Pure name-match helper (unit-testable
-    offline); the ``me()`` I/O lives in ``main.py``.
-
-    Args:
-        me_user: The ``User`` object from ``current_user.me()``.
-        report: The active report config.
-        suffix: The download-group suffix (env-configurable).
-        system_admin_group: The system-admin group display name (env-configurable).
-
-    Returns:
-        ``True`` if the user is a system admin OR a member of the report's
-        effective download group; ``False`` otherwise.
-    """
-    return is_system_admin(me_user, system_admin_group) or is_member(
-        me_user, effective_download_group(report, suffix)
-    )
-
-
 def can_view_report(
     me_user: Any,
     report: "ReportConfig",
-    suffix: str = DEFAULT_DOWNLOAD_SUFFIX,
     system_admin_group: str = SYSTEM_ADMIN_GROUP,
 ) -> bool:
-    """Return whether the user may SEE a report — group member OR system admin.
+    """Return whether the user may ACCESS a report — group member OR system admin.
 
-    Same as :func:`can_view`, but a system administrator can always see every
-    report (and therefore every resource collection), mirroring
-    :func:`can_download_group`. This keeps a system admin's nav/collection
-    switcher complete even for collections whose view group they don't belong to
-    (data reads still run OBO, so a source they cannot read shows the usual
-    access notice). Pure name-match; the ``me()`` I/O lives in ``main.py``.
+    This single predicate governs BOTH viewing and downloading: every user who
+    can access a report may also download it (the separate download group / the
+    ``_dl`` naming convention have been removed). A system administrator can
+    always access every report (and therefore every resource collection); data
+    reads still run OBO, so a source they cannot read shows the usual access
+    notice. The global download kill switch (``config.downloads_enabled``) is
+    layered on top by the caller in ``main.py``. Pure name-match; the ``me()``
+    I/O lives in ``main.py``.
 
     Args:
         me_user: The ``User`` object from ``current_user.me()``.
         report: The report config.
-        suffix: The download-group suffix (env-configurable).
         system_admin_group: The system-admin group display name (env-configurable).
 
     Returns:
-        ``True`` if the user is a system admin OR can view the report's group.
+        ``True`` if the user is a system admin OR a member of the report's access
+        group.
     """
-    return is_system_admin(me_user, system_admin_group) or can_view(
-        me_user, report, suffix
-    )
+    return is_system_admin(me_user, system_admin_group) or can_view(me_user, report)
 
 
 def _get_case_insensitive(headers: Any, key: str) -> str | None:
@@ -396,7 +316,7 @@ def is_member(me_user: Any, group_display: str) -> bool:
     Args:
         me_user: The ``User`` object from ``current_user.me()``.
         group_display: The group display name to check (e.g.
-            :data:`DOWNLOAD_GROUP`).
+            :data:`DEFAULT_VIEW_GROUP`).
 
     Returns:
         ``True`` if ``group_display`` is among the user's group display names,

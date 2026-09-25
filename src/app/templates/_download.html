@@ -78,15 +78,26 @@
             <p class="usa-alert__text" data-role="download-status-text">
               Your download is being prepared…
             </p>
-            <a class="usa-button margin-top-1" data-role="download-ready-link"
-               href="#" hidden>
-              <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
-                <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
-              </svg>
-              Download
-            </a>
-            <a class="usa-link margin-top-1 display-inline-block margin-left-2"
-               href="/downloads" data-role="download-downloads-link">Go to My downloads</a>
+            {# Ready-state actions: the primary Download link (revealed by app.js
+               when the job is ready) and a secondary outline link to My downloads,
+               both aligned on one row (wraps on narrow screens). Styled as buttons
+               so the secondary action reads as navy, not a stray purple link. #}
+            <div class="app-dl-actions margin-top-2">
+              <a class="usa-button" data-role="download-ready-link"
+                 href="#" download hidden>
+                <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+                  <use xlink:href="/static/uswds/img/sprite.svg#file_download"></use>
+                </svg>
+                Download
+              </a>
+              <a class="usa-button usa-button--outline" href="/downloads"
+                 data-role="download-downloads-link">
+                <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
+                  <use xlink:href="/static/uswds/img/sprite.svg#list"></use>
+                </svg>
+                Go to My downloads
+              </a>
+            </div>
           </div>
         </div>
 

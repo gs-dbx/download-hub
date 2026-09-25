@@ -190,9 +190,9 @@ class ReportConfig:
         report_id: Stable registry key.
         title: Human-facing report title.
         kind: The report kind — ``"query"`` (default) reads ``source_query``;
-            ``"volume"`` browses/downloads files under ``volume_root``. Shared
-            view/download gating (``view_key`` / ``download_group``) applies to
-            both kinds.
+            ``"volume"`` browses/downloads files under ``volume_root``. Access
+            gating (``view_key``) applies to both kinds; any user who can access a
+            report may also download it.
         volume_root: For a ``"volume"`` report, the single pinned UC Volume root
             path (``/Volumes/<catalog>/<schema>/<volume>[/subpath]``) users may
             browse below; empty for a ``"query"`` report.
@@ -208,11 +208,9 @@ class ReportConfig:
         order_by: Optional ORDER BY column name (``None`` for no ordering).
         display_order: Sort order among enabled reports within a view.
         enabled: Whether the report is active.
-        download_group: Optional explicit per-report download group. ``None``
-            means "derive from ``view_key`` by naming convention" (see
-            ``auth.effective_download_group``).
         view_key: The view this report belongs to (also the Databricks group that
-            grants view access). ``None`` uses the default view.
+            grants access — viewing and downloading alike). ``None`` uses the
+            default view.
         updated_by: Email of the admin who last wrote the row (bookkeeping).
     """
 
@@ -225,7 +223,6 @@ class ReportConfig:
     order_by: str | None
     display_order: int
     enabled: bool
-    download_group: str | None = None
     view_key: str | None = None
     updated_by: str | None = None
     kind: str = "query"
@@ -350,7 +347,7 @@ def parse_report_config(row: dict) -> ReportConfig:
             ``enabled``; ``kind`` (optional, default ``"query"``); for a query
             report ``source_query`` (required) plus ``columns_json`` /
             ``filters_json`` / ``order_by`` (optional); for a
-            volume report ``volume_root`` (required); and ``download_group`` /
+            volume report ``volume_root`` (required); and
             ``view_key`` / ``updated_by`` (optional, both kinds).
 
     Returns:
@@ -406,7 +403,6 @@ def parse_report_config(row: dict) -> ReportConfig:
         order_by=row.get("order_by"),
         display_order=int(row["display_order"]),
         enabled=bool(row["enabled"]),
-        download_group=row.get("download_group"),
         view_key=(row.get("view_key") or "").strip() or None,
         updated_by=row.get("updated_by"),
         kind=kind,

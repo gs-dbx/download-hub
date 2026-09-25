@@ -343,9 +343,10 @@ spark.sql(
 )
 
 # The view registry (the switcher). Each view's `view_key` is BOTH the URL key
-# and the Databricks group that grants view access; `title` is the switcher
-# label. A report's download group derives as `<view_key>` + suffix (default
-# `_dl`) unless it sets an explicit `download_group`.
+# and the Databricks group that grants access; `title` is the switcher label.
+# There is no separate download tier: every member of the access group can view
+# AND download the view's reports (the `download_group` column is retained for
+# schema compatibility only and is no longer used by the app).
 spark.sql(
     f"""
     CREATE TABLE IF NOT EXISTS {view_fqn} (
@@ -410,8 +411,9 @@ if "admin_group" not in _view_cols:
     spark.sql(f"ALTER TABLE {view_fqn} ADD COLUMNS (admin_group STRING)")
     print("added report_view column: admin_group")
 
-# Seed a default view for report #1. `view_key` and `download_group` come from
-# bundle job parameters and must name Databricks groups in the target workspace.
+# Seed a default view for report #1. `view_key` comes from bundle job parameters
+# and must name a Databricks group in the target workspace (the `download_group`
+# param/column is retained for schema compatibility only; the app ignores it).
 # `collection_admin_group` (optional) names the delegated per-collection admin
 # group; blank => NULL (system admins only). Guarded to a bare identifier so it
 # is safe to interpolate; anything else is treated as unset.

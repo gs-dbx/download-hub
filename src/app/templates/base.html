@@ -41,7 +41,10 @@
   <header class="app-header">
     <div class="app-header__inner">
       <img class="app-header__logo" src="{{ app_logo }}" alt="{{ app_org_name }}">
-      <span class="app-header__app">{{ app_name }}</span>
+      {# App name doubles as a Home link back to the landing report ("/" resolves
+         to the user's first visible report). Styled to read as the wordmark, not
+         a blue link. #}
+      <a class="app-header__app" href="/">{{ app_name }}</a>
       {# Live SQL-warehouse status; app.js polls /health/warehouse. Serverless
          warehouses auto-suspend, so a cold start adds latency — this tells the
          user whether the first query will be slow. #}
@@ -123,6 +126,16 @@
   <div class="app-navoverlay" data-role="nav-overlay" hidden aria-hidden="true">
     <span class="app-spinner__dot" role="status" aria-label="Running query"></span>
     <span class="app-navoverlay__label">Running query…</span>
+  </div>
+
+  {# Warehouse cold-start overlay. Serverless warehouses auto-suspend; when app.js
+     finds it stopped/starting on first visit it reveals this, asks the server to
+     start it, and polls until it's running (then hides). "Continue anyway"
+     dismisses it, and app.js caps the wait so it can never spin forever. #}
+  <div class="app-whoverlay" data-role="wh-overlay" hidden aria-hidden="true">
+    <span class="app-spinner__dot" role="status" aria-label="Warehouse starting"></span>
+    <span class="app-navoverlay__label" data-role="wh-overlay-label">The SQL warehouse is starting. This can take up to a minute…</span>
+    <button type="button" class="usa-button usa-button--outline" data-role="wh-overlay-dismiss">Continue anyway</button>
   </div>
 
   <script src="/static/uswds/js/uswds.min.js" defer></script>

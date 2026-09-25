@@ -33,7 +33,6 @@ REPORTED_ENV: tuple[tuple[str, bool], ...] = (
     ("DOWNLOADS_ENABLED", False),
     ("ADMIN_GROUP", False),
     ("SYSTEM_ADMIN_GROUP", False),
-    ("DOWNLOAD_GROUP_SUFFIX", False),
     ("APP_NAME", False),
     ("MAX_DOWNLOAD_ROWS", False),
     ("MAX_XLSX_ROWS", False),

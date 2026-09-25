@@ -8,16 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.auth import (
-    DEFAULT_DOWNLOAD_SUFFIX,
-    DOWNLOAD_GROUP,
+    DEFAULT_VIEW_GROUP,
     USER_TOKEN_HEADER,
     can_admin_any,
-    can_download_group,
     can_view,
     can_view_report,
     collection_admin_group,
-    derive_download_group,
-    effective_download_group,
     effective_view_group,
     extract_user_email,
     extract_user_token,
@@ -43,7 +39,6 @@ def test_parse_scim_user_id_passthrough_for_emails_and_blank():
 
 def _report(**kw):
     """A minimal report-like object (only the attrs auth reads)."""
-    kw.setdefault("download_group", None)
     kw.setdefault("view_key", None)
     return SimpleNamespace(**kw)
 
@@ -77,9 +72,9 @@ def test_extract_user_token_empty_raises():
         extract_user_token({USER_TOKEN_HEADER: ""})
 
 
-def test_download_group_constant():
-    """DOWNLOAD_GROUP is the generic default group display name."""
-    assert DOWNLOAD_GROUP == "download_hub_download_users"
+def test_default_view_group_constant():
+    """DEFAULT_VIEW_GROUP is the generic default access-group display name."""
+    assert DEFAULT_VIEW_GROUP == "download_hub_download_users"
 
 
 def test_extract_user_email_present():
@@ -97,72 +92,44 @@ def test_is_member_true():
     user = SimpleNamespace(
         groups=[
             SimpleNamespace(display="users"),
-            SimpleNamespace(display=DOWNLOAD_GROUP),
+            SimpleNamespace(display=DEFAULT_VIEW_GROUP),
         ]
     )
-    assert is_member(user, DOWNLOAD_GROUP) is True
+    assert is_member(user, DEFAULT_VIEW_GROUP) is True
 
 
 def test_is_member_false_when_not_in_groups():
     """is_member is False when the group is not among the user's groups."""
     user = SimpleNamespace(groups=[SimpleNamespace(display="users")])
-    assert is_member(user, DOWNLOAD_GROUP) is False
+    assert is_member(user, DEFAULT_VIEW_GROUP) is False
 
 
 def test_is_member_false_empty_groups():
     """is_member is False for a user with no groups."""
-    assert is_member(SimpleNamespace(groups=[]), DOWNLOAD_GROUP) is False
-
-
-def test_effective_download_group_uses_report_group_when_set():
-    """An explicit download_group wins (stripped), regardless of view_key."""
-    assert effective_download_group(_report(download_group="grp_x", view_key="v")) == "grp_x"
-    assert effective_download_group(_report(download_group="  grp_y  ")) == "grp_y"
-
-
-def test_effective_download_group_derives_from_view_key():
-    """No explicit group -> derive <view_key> + suffix (naming convention)."""
-    assert (
-        effective_download_group(_report(view_key="efile_ops"))
-        == "efile_ops" + DEFAULT_DOWNLOAD_SUFFIX
-    )
-    assert effective_download_group(_report(view_key="ops"), "_download") == "ops_download"
-
-
-def test_effective_download_group_no_view_no_explicit_uses_default_group():
-    """No explicit group AND no view_key -> derive from the DOWNLOAD_GROUP fallback."""
-    assert (
-        effective_download_group(_report())
-        == DOWNLOAD_GROUP + DEFAULT_DOWNLOAD_SUFFIX
-    )
+    assert is_member(SimpleNamespace(groups=[]), DEFAULT_VIEW_GROUP) is False
 
 
 def test_effective_view_group():
-    """The view group is the view_key, falling back to DOWNLOAD_GROUP when unset."""
+    """The access group is the view_key, falling back to DEFAULT_VIEW_GROUP."""
     assert effective_view_group(_report(view_key="efile_ops")) == "efile_ops"
-    assert effective_view_group(_report(view_key=None)) == DOWNLOAD_GROUP
-
-
-def test_derive_download_group():
-    """derive_download_group appends the suffix."""
-    assert derive_download_group("efile_ops") == "efile_ops" + DEFAULT_DOWNLOAD_SUFFIX
-    assert derive_download_group("x", "_rw") == "x_rw"
+    assert effective_view_group(_report(view_key=None)) == DEFAULT_VIEW_GROUP
 
 
 def test_can_view_via_view_group():
-    """A member of the view group can see the report."""
+    """A member of the access group can see (and download) the report."""
     r = _report(view_key="efile_ops")
     assert can_view(_user("efile_ops"), r) is True
 
 
-def test_can_view_via_download_group():
-    """A member of only the (derived) download group can still see the report."""
-    r = _report(view_key="efile_ops")  # download group -> efile_ops_dl
-    assert can_view(_user("efile_ops_dl"), r) is True
+def test_can_view_no_separate_download_tier():
+    """There is no separate download group: only the access group grants access."""
+    r = _report(view_key="efile_ops")
+    # The old derived "<view_key>_dl" group no longer grants anything.
+    assert can_view(_user("efile_ops_dl"), r) is False
 
 
-def test_can_view_denied_when_in_neither():
-    """A user in neither the view nor download group cannot see the report."""
+def test_can_view_denied_when_not_in_access_group():
+    """A user outside the access group cannot see the report."""
     r = _report(view_key="efile_ops")
     assert can_view(_user("some_other_group"), r) is False
 
@@ -218,33 +185,33 @@ def test_can_admin_any_system_or_any_collection():
     assert can_admin_any(_user("x"), None, "sys") is False
 
 
-def test_can_download_group_member_allowed():
-    """A member of the report's (derived) download group may download."""
-    r = _report(view_key="efile_ops")  # download group -> efile_ops_dl
-    assert can_download_group(_user("efile_ops_dl"), r, system_admin_group="sys") is True
-
-
-def test_can_download_group_non_member_denied():
-    """A user in neither the download group nor the system-admin group cannot."""
+def test_can_view_report_governs_download_for_access_member():
+    """Any member of the access group may download (download == access now)."""
     r = _report(view_key="efile_ops")
-    assert can_download_group(_user("efile_ops"), r, system_admin_group="sys") is False
+    assert can_view_report(_user("efile_ops"), r, system_admin_group="sys") is True
 
 
-def test_can_download_group_system_admin_always_allowed():
-    """A system admin may download regardless of download-group membership."""
+def test_can_view_report_denies_download_for_non_member():
+    """A user outside the access group and not a system admin cannot download."""
     r = _report(view_key="efile_ops")
-    # Only in the system-admin group, not the report's download group.
-    assert can_download_group(_user("sys"), r, system_admin_group="sys") is True
+    assert can_view_report(_user("other"), r, system_admin_group="sys") is False
+
+
+def test_can_view_report_system_admin_always_allowed():
+    """A system admin may access/download every report regardless of its group."""
+    r = _report(view_key="efile_ops")
+    # Only in the system-admin group, not the report's access group.
+    assert can_view_report(_user("sys"), r, system_admin_group="sys") is True
 
 
 def test_can_view_report_group_member():
-    """A member of the report's view group can see it."""
+    """A member of the report's access group can see it."""
     r = _report(view_key="efile_ops")
     assert can_view_report(_user("efile_ops"), r, system_admin_group="sys") is True
 
 
 def test_can_view_report_system_admin_sees_any_collection():
-    """A system admin sees every report even without its view/download group."""
+    """A system admin sees every report even without its access group."""
     r = _report(view_key="new_collection")
     assert can_view_report(_user("sys"), r, system_admin_group="sys") is True
 

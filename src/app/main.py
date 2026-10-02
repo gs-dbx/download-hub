@@ -869,7 +869,7 @@ async def _log_config_audit(
 def _visible_reports(
     configs: list[ReportConfig], me_user
 ) -> list[ReportConfig]:
-    """Return resources the user may see (collection or download group).
+    """Return resources the user may see (via their collection access group).
 
     Args:
         configs: All enabled reports (sorted).
@@ -1924,7 +1924,7 @@ async def report_table(request: Request, report_id: str) -> HTMLResponse:
     email = extract_user_email(request.headers)
 
     # Visibility re-check (defense in depth): the caller must belong to the
-    # resource's collection access group or download group.
+    # resource's collection access group (which also governs download).
     me_user = await _me(token)
     if me_user is None or not can_view_report(me_user, report, _SYSTEM_ADMIN_GROUP):
         return HTMLResponse(

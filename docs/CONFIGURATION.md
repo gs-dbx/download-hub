@@ -17,7 +17,6 @@ All app configuration comes from environment variables in `src/app/app.yaml`. Se
 | `APP_LOGO` | `/static/img/logo.svg` | Path to logo image (must be `/static/...` for air-gap compliance) |
 | `APP_VERSION` | `0.0.0` | Semantic version string (recorded in audit logs) |
 | `ADMIN_GROUP` | `download_hub_admin_users` | Databricks group whose members get the `/admin` console |
-| `DOWNLOAD_GROUP_SUFFIX` | `_dl` | Suffix appended to a report's `view_key` to derive its download group when `download_group` is unset |
 | `DOWNLOADS_ENABLED` | `true` | Global kill switch (`false`/`0`/`no`/`off` disables downloads) |
 | `DOWNLOAD_DISCLAIMER` | (see below) | Custom data-handling notice (optional; falls back to built-in generic) |
 | `MAX_XLSX_ROWS` | `25000` | Largest Excel export; larger requests direct users to CSV |
@@ -132,7 +131,7 @@ The app reads `{APP_CATALOG}.{APP_SCHEMA}.report_config` once at startup and eve
 | `order_by` | STRING | Optional column to ORDER BY results (bare identifier, or NULL for no ordering). Can be any column the `source_query` returns — including one not in `columns_json` (e.g. a hidden `sort_order`); the paging layer projects it internally so ordering by a non-displayed column resolves. |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab, 2 = second, etc.). |
 | `enabled` | BOOLEAN | Whether the report is active (only `true` rows are shown). |
-| `download_group` | STRING | Optional per-report download group. If NULL, derived from `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`). |
+| `download_group` | STRING | Legacy/vestigial. Access and download are a single tier — every user who can view a report may download it — so this column no longer gates anything. Retained only for schema compatibility (the admin console writes it empty; a legacy seed may still populate it, but the app ignores it). |
 | `view_key` | STRING | Legacy storage name for the collection key: the Databricks group granting access and the resource's collection membership. |
 | `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (admin console stamps the editor's email). |
 
@@ -263,17 +262,17 @@ UPDATE main.default.report_config SET display_order = 1 WHERE report_id = 'my_re
 UPDATE main.default.report_config SET display_order = 2 WHERE report_id = 'other_report';
 ```
 
-### Per-report download gating
+### Download gating
 
-Set `download_group` to gate downloads to a specific Databricks group:
-
-```sql
-UPDATE main.default.report_config
-SET download_group = 'my_custom_group'
-WHERE report_id = 'my_report';
-```
-
-When `download_group` is set (non-NULL, non-empty after stripping), the effective download group for that report is the value. Otherwise, it is derived from the resource collection's legacy `view_key` + `DOWNLOAD_GROUP_SUFFIX` (`_dl`).
+Access and download are a single tier: every user who can view a report may also
+download it. There is no separate download group — the former derived
+`<view_key>_dl` download group (and the `effective_download_group` /
+`DOWNLOAD_GROUP_SUFFIX` machinery) have been removed. Downloads are gated only by
+the global `DOWNLOADS_ENABLED` kill switch and the user's access to the report,
+re-checked server-side on every `POST /download`. The `download_group` column
+remains for schema compatibility but is no longer consulted for gating, and
+downloads still run OBO, so each user still needs their own source-data
+privileges.
 
 The database retains the `report_view` table and `view_key` column for backward
 compatibility. In the product and documentation they represent resource

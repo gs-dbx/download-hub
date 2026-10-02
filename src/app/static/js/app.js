@@ -424,6 +424,7 @@
   var dlStatus = dlByRole("download-status");
   var dlStatusText = dlByRole("download-status-text");
   var dlReadyLink = dlByRole("download-ready-link");
+  var dlDownloadsLink = dlByRole("download-downloads-link");
   var dlPollTimer = null;
 
   // Keep the button's loading state on-screen for a minimum time so a fast/small
@@ -435,24 +436,37 @@
   function showDownloadError(msg) {
     if (dlErrorText) dlErrorText.textContent = msg;
     if (dlError) dlError.hidden = false;
+    // An error is terminal: clear any in-progress status, links, and polling so
+    // the "being prepared" panel never lingers beneath the error message.
+    if (dlStatus) dlStatus.hidden = true;
+    if (dlReadyLink) dlReadyLink.hidden = true;
+    if (dlDownloadsLink) dlDownloadsLink.hidden = true;
+    if (dlPollTimer) {
+      clearTimeout(dlPollTimer);
+      dlPollTimer = null;
+    }
   }
   function clearDownloadError() {
     if (dlError) dlError.hidden = true;
     if (dlErrorText) dlErrorText.textContent = "";
     if (dlStatus) dlStatus.hidden = true;
     if (dlReadyLink) dlReadyLink.hidden = true;
+    if (dlDownloadsLink) dlDownloadsLink.hidden = true;
     if (dlPollTimer) {
       clearTimeout(dlPollTimer);
       dlPollTimer = null;
     }
   }
 
-  // Reveal the async status panel with a message (Download button stays hidden
-  // until the job is ready).
+  // Reveal the async status panel with a message. Both action links stay hidden:
+  // the Download button until the job is ready, and "Go to My downloads" until the
+  // job is actually queued — so the FIRST feedback the user sees on click is the
+  // in-progress status, not a link navigating away from it.
   function showDownloadStatus(msg) {
     if (dlStatusText)
       dlStatusText.textContent = msg || "Your download is being prepared…";
     if (dlReadyLink) dlReadyLink.hidden = true;
+    if (dlDownloadsLink) dlDownloadsLink.hidden = true;
     if (dlStatus) dlStatus.hidden = false;
   }
 
@@ -529,6 +543,11 @@
           '<span class="app-btn-spinner" aria-hidden="true"></span> Preparing download…';
         _dlBtnShownAt = Date.now();
       }
+      // Immediate feedback: reveal the "being prepared" status the instant the
+      // button is pressed — BEFORE the POST returns — so a long-running queue
+      // request still shows progress right away. "Go to My downloads" stays
+      // hidden until the job is actually queued (revealed below).
+      showDownloadStatus();
       // NOTE: do NOT show the report-table "Running query…" spinner here. The
       // modal covers the table, and the button spinner + status panel below are
       // the correct feedback; showing the table scrim only flashes a spurious
@@ -553,7 +572,12 @@
           info = {};
         }
         if (info && info.queued) {
-          showDownloadStatus(info.message);
+          // Job accepted: update the already-visible status and now surface the
+          // "Go to My downloads" escape hatch, then poll until the file is ready.
+          if (dlStatusText)
+            dlStatusText.textContent =
+              info.message || "Your download is being prepared…";
+          if (dlDownloadsLink) dlDownloadsLink.hidden = false;
           pollJob(info.job_id);
         } else {
           showDownloadError(

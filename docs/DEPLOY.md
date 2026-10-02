@@ -231,7 +231,7 @@ env:
 All downloads are generated to this volume, so it is **required** (without it
 `POST /download` returns 503). Create it first and grant only the app service
 principal `READ VOLUME` and `WRITE VOLUME`, plus catalog/schema usage. Do not
-grant end-user download groups direct volume access; the app performs ownership
+grant end-user groups direct volume access; the app performs ownership
 and authorization checks before proxying retrieval. Verify upload and retrieval
 while signed in as a member of each group. Retention is handled by the
 `exports_cleanup` scheduled job (section 3, 24h TTL); each export uses a unique

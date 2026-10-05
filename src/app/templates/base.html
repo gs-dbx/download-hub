@@ -133,9 +133,11 @@
      start it, and polls until it's running (then hides). "Continue anyway"
      dismisses it, and app.js caps the wait so it can never spin forever. #}
   <div class="app-whoverlay" data-role="wh-overlay" hidden aria-hidden="true">
-    <span class="app-spinner__dot" role="status" aria-label="Warehouse starting"></span>
-    <span class="app-navoverlay__label" data-role="wh-overlay-label">The SQL warehouse is starting. This can take up to a minute…</span>
-    <button type="button" class="usa-button usa-button--outline" data-role="wh-overlay-dismiss">Continue anyway</button>
+    <div class="app-whoverlay__card">
+      <span class="app-spinner__dot" role="status" aria-label="Warehouse starting"></span>
+      <span class="app-navoverlay__label" data-role="wh-overlay-label">The SQL warehouse is starting. This can take up to a minute…</span>
+      <button type="button" class="usa-button usa-button--outline" data-role="wh-overlay-dismiss">Continue anyway</button>
+    </div>
   </div>
 
   <script src="/static/uswds/js/uswds.min.js" defer></script>

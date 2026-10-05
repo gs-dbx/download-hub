@@ -50,7 +50,7 @@ The **Data Download Hub** is a configurable, server-rendered FastAPI application
 
 - **OBO reads:** header `X-Forwarded-Access-Token` → `WorkspaceClient(auth_type="pat")` → runs AS THE USER
 - **SP writes + registry reads:** injected `DATABRICKS_CLIENT_ID` / `SECRET` → `WorkspaceClient()` (no explicit auth) → runs AS THE APP
-- **Download group check:** `current_user.me()` OBO call → check group display names against effective download group
+- **Download gate:** `current_user.me()` OBO call → `can_view_report()` (access == download, single tier) + the `DOWNLOADS_ENABLED` kill switch
 - No fallback: missing OBO token → 401 (no CLI profile, no mock data)
 
 ### Configuration
@@ -127,7 +127,7 @@ INSERT INTO main.default.report_config VALUES (
   'col1',                                -- order_by (optional; NULL for no sort)
   2,                                     -- display_order
   true,                                  -- enabled
-  NULL,                                  -- download_group (NULL → code default; set to a Databricks group name to gate to that group)
+  NULL,                                  -- download_group (legacy/unused; access == download, so leave NULL)
   current_timestamp()                    -- updated_at
 )
 ```

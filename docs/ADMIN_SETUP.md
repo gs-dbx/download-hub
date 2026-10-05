@@ -63,25 +63,25 @@ every object referenced by each configured `source_query`.
 
 ## 4. Create the access groups
 
-There are three kinds of groups:
+There are two kinds of groups:
 
 | Group | Default/example | Purpose |
 |---|---|---|
-| Collection access group | `download_hub_app_users` | A resource collection's key (stored as `view_key`); members can see resources in that collection. |
-| Download group | `download_hub_download_users` for the seeded resource; otherwise an explicit `download_group` or derived `<view_key>_dl` | Members can see the collection and download its resources. |
+| Collection access group | `download_hub_app_users` | A resource collection's key (stored as `view_key`); members can see **and download** the resources in that collection. |
 | Administrator group | `download_hub_admin_users` | Members can open `/admin` and mutate app configuration through the UI. |
 
 Create these as account-level/federated groups when Unity Catalog requires it.
-Add users to the smallest necessary group. Download membership does not replace
-source-data privileges; downloads still query OBO as the user.
+Add users to the smallest necessary group. Access and download are a single tier —
+every member of a collection's access group may download its resources — so there
+is no separate download group to create. Membership does not replace source-data
+privileges; downloads still query OBO as the user.
 
-For additional resource collections, create another collection access group and normally a matching `_dl`
-group. The `DOWNLOAD_GROUP_SUFFIX` environment variable changes that suffix.
+For additional resource collections, create another collection access group.
 
 ## 5. Grant access to the Databricks App
 
 In the workspace UI, open **Apps → download-hub → Permissions** and grant
-`CAN USE` to every collection access group, download group, and administrator group that must
+`CAN USE` to every collection access group and administrator group that must
 open the app. Reserve `CAN MANAGE` for deployment/application operators.
 
 This app-level permission is separate from group membership stored in
@@ -99,7 +99,7 @@ Set the same warehouse ID in:
 
 Grant `CAN USE` on the warehouse to:
 
-- every collection/download group whose members run resource queries;
+- every collection access group whose members run resource queries;
 - the administrator group if admins will preview queries;
 - any other user group expected to execute OBO report reads.
 
@@ -139,8 +139,6 @@ env:
     value: "download_hub"
   - name: ADMIN_GROUP
     value: "download_hub_admin_users"
-  - name: DOWNLOAD_GROUP_SUFFIX
-    value: "_dl"
   - name: APP_EXPORT_VOLUME
     value: "/Volumes/main/download_hub/exports"
 ```
@@ -216,18 +214,14 @@ schema, group, source-object, and service-principal placeholders.
 
 ## 10. Grant report users access to source data
 
-Query resources execute as the signed-in user. For each resource collection, grant both
-the collection access group and its download group the privileges required by the resource's
+Query resources execute as the signed-in user. For each resource collection, grant
+the collection access group the privileges required by the resource's
 `source_query`:
 
 ```sql
 GRANT USE CATALOG ON CATALOG main TO `finance_reports`;
 GRANT USE SCHEMA ON SCHEMA main.finance TO `finance_reports`;
 GRANT SELECT ON TABLE main.finance.monthly_budget TO `finance_reports`;
-
-GRANT USE CATALOG ON CATALOG main TO `finance_reports_dl`;
-GRANT USE SCHEMA ON SCHEMA main.finance TO `finance_reports_dl`;
-GRANT SELECT ON TABLE main.finance.monthly_budget TO `finance_reports_dl`;
 ```
 
 Repeat for every catalog, schema, table, view, function, or other dependency
@@ -255,7 +249,7 @@ GRANT READ VOLUME, WRITE VOLUME ON VOLUME main.download_hub.exports
 The app queries rows OBO, stages the CSV, and uploads/retrieves the generated
 file as its service principal after enforcing authorization and ownership.
 
-Do **not** blindly grant end users or download groups access to this volume.
+Do **not** blindly grant end users or collection access groups access to this volume.
 Configure a retention/cleanup job because successful exports use unique audit-ID
 directories and are not overwritten.
 
@@ -280,7 +274,8 @@ For a query report:
 4. Select displayed columns, labels, formats, optional aggregation, and filters.
 5. Configure dates as ordinary filters. The legacy `date_field` registry column
    is unused.
-6. Set ordering, enablement, and an optional explicit download group.
+6. Set ordering and enablement. No download group is needed — any member of the
+   collection's access group may download, subject to the global kill switch.
 7. Save, then test as a non-admin member of the intended group.
 
 Every filter field and selected display/order column must be present in the

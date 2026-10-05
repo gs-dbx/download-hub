@@ -30,7 +30,7 @@ A report is one of two **kinds** (the `kind` column; default `query`):
 | `order_by` | STRING | Optional column to `ORDER BY` (or `NULL` for no ordering). May be **any column the `source_query` returns**, including one not listed in `columns_json` (e.g. a canonical `sort_order` used only for ordering). The paging layer projects it internally so the sort resolves; it is never shown as a display column. |
 | `display_order` | INT | Sort order among enabled reports (1 = first tab). |
 | `enabled` | BOOLEAN | Whether the report is active. |
-| `download_group` | STRING | Optional per-report download group (`NULL` → derived from `view_key` + suffix). |
+| `download_group` | STRING | Legacy/vestigial. Access and download are a single tier, so this column no longer gates anything; retained only for schema compatibility. |
 | `view_key` | STRING | Legacy storage name for the collection key: the Databricks group granting access and the resource's collection membership. |
 | `updated_at` / `updated_by` | TIMESTAMP / STRING | Bookkeeping (the admin console stamps the editor's email). |
 
@@ -107,9 +107,9 @@ VALUES
    current_timestamp(), 'seed');
 ```
 
-Users who are members of the collection group stored in `view_key` (or its download group) see the resource; they
+Users who are members of the collection group stored in `view_key` see the resource; they
 browse folders/subfolders under the root (jailed to it) and download individual
-files. Grant the groups `READ VOLUME` on the root — see [PERMISSIONS.md](PERMISSIONS.md).
+files. Grant that group `READ VOLUME` on the root — see [PERMISSIONS.md](PERMISSIONS.md).
 
 ## Adding or updating a report
 
@@ -141,10 +141,10 @@ table.
 
 ## Download applies to every report
 
-Download is generic: any report gets a group-gated download that exports the **current filtered on-screen view** with the data-handling disclaimer at the top. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume.
+Download is generic: any report a user can view also gets a download that exports the **current filtered on-screen view** with the data-handling disclaimer at the top. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume.
 
-- Gating: `downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
-- `effective_download_group(report)` = the report's `download_group` when set (stripped), otherwise `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default `_dl`). The seed supplies an explicit bundle-configured download group.
+- Gating: `downloads_enabled(...) AND can_view_report(me(), report)` — access and download are a single tier (every user who can view a report may download it).
+- There is no separate download group: the former derived `<view_key>_dl` download group and the `effective_download_group` / `DOWNLOAD_GROUP_SUFFIX` machinery have been removed. The `download_group` column remains for schema compatibility but is unused and no longer consulted for gating.
 - Each download writes exactly one audit row to `{APP_CATALOG}.{APP_SCHEMA}.download_audit` (audit-first) carrying `report_id`/`report_title` and an applied-filters summary. See [PERMISSIONS.md](PERMISSIONS.md).
 
 ## Injection safety

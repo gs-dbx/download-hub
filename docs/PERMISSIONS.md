@@ -15,7 +15,7 @@ A `kind = 'volume'` report browses a pinned UC Volume root (`volume_root`). Both
 the folder listing and the file download run **as the signed-in user (OBO)** via
 the Files API, so Unity Catalog enforces the user's own access:
 
-- Grant the resource's **collection access group** (and its download group) **`READ VOLUME`** on
+- Grant the resource's **collection access group** **`READ VOLUME`** on
   the volume so members can list + download:
   `GRANT READ VOLUME ON VOLUME <catalog>.<schema>.<volume> TO \`<group>\`;`
 - Every browsed path is **root-relative and path-jailed** server-side (a `..`,
@@ -26,15 +26,15 @@ the Files API, so Unity Catalog enforces the user's own access:
 
 ## Download gating
 
-Download is generic — it applies to **every** report and exports the current filtered on-screen view. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume. It is allowed only when **both** conditions hold, re-checked server-side on every `POST /download`:
+Download is generic — it applies to **every** report and exports the current filtered on-screen view. Direct results are capped; large CSV results are fetched OBO in bounded pages and delivered through the configured export volume. Access and download are a **single tier**: every user who can view a report may also download it. It is allowed only when **both** conditions hold, re-checked server-side on every `POST /download`:
 
-1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty). When off, `POST /download` returns 403 "Downloads are temporarily disabled." and the UI panel is hidden — independent of group membership.
-2. **Group membership:** the user is a member of the report's **effective download group**, determined from `current_user.me()` group display names.
+1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty). When off, `POST /download` returns 403 "Downloads are temporarily disabled." and the UI panel is hidden — independent of access.
+2. **Report access:** the user can view the report — a member of the collection's access group (its `view_key`) or a system admin, per `can_view_report(me(), report)`.
 
-`can_download = downloads_enabled(...) AND is_member(me(), effective_download_group(report))`.
-`effective_download_group(report)` is the report's `report_config.download_group` when set (stripped), otherwise `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default suffix `_dl`). The seeded report uses the bundle's explicit `download_users_group` value (`download_hub_download_users` by default). The **same** helper drives both button visibility and server enforcement.
+`can_download = downloads_enabled(...) AND can_view_report(me(), report)`.
+There is no separate download group: the former derived `<view_key>_dl` download group and the `effective_download_group` / `DOWNLOAD_GROUP_SUFFIX` machinery have been removed, so viewing and downloading are governed by the one access predicate. The `report_config.download_group` column remains for schema compatibility but is unused and no longer consulted for gating.
 
-The gate **never fails open**: any error resolving membership degrades to "not allowed" (panel hidden, download denied). The hidden UI panel is never trusted — membership is always re-checked on the server before a file is produced.
+The gate **never fails open**: any error resolving access degrades to "not allowed" (panel hidden, download denied). The hidden UI panel is never trusted — access is always re-checked on the server before a file is produced. Downloads still run OBO, so a user also needs the underlying source-data privileges.
 
 ## Audit (audit-first)
 
@@ -44,16 +44,15 @@ The gate **never fails open**: any error resolving membership degrades to "not a
 
 ## Group-based access control
 
-Two Databricks groups gate the app:
+A resource collection's access group gates the app; access and download are a
+single tier (no separate download group):
 
 | Group | Purpose |
 | --- | --- |
-| `download_hub_app_users` | app access — SELECT on `{APP_CATALOG}.{APP_SCHEMA}.report_config` and report source tables via OBO |
-| `download_hub_download_users` | the gated download feature (can export data) |
+| `download_hub_app_users` (a collection access group) | app access — SELECT on `{APP_CATALOG}.{APP_SCHEMA}.report_config` and report source tables via OBO. Members may view **and** download the collection's resources. |
+| `download_hub_admin_users` (administrator group) | open `/admin` and manage app configuration; grants no source-data access by itself |
 
-Access is granted by adding a user to the corresponding resource collection access group (see [DEPLOY.md](DEPLOY.md) §5). App-users can view any resource their user account has UC SELECT access to; download-users additionally clear the download gate and can export data (subject to UC access control on the source table).
-
-A report can optionally override the default download group via its `report_config.download_group` column — setting this to a different Databricks group name gates downloads for that specific report to only members of that group.
+Access is granted by adding a user to the corresponding resource collection access group (see [DEPLOY.md](DEPLOY.md) §5). A member can view **and** download any resource their user account also has UC SELECT access to (downloads run OBO, so UC access control on the source table still applies). The global `DOWNLOADS_ENABLED` kill switch can disable downloads for everyone.
 
 ## Known follow-up — account-level federation
 

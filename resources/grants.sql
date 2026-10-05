@@ -32,20 +32,17 @@
 
 -- ---------------------------------------------------------------------------
 -- Per-view DATA access (OBO). Repeat this block for EACH view, substituting the
--- view's key and the table(s) its reports read. Both the view group and its
--- derived download group need SELECT on the data (download-group members also
--- view). Example view_key = `download_hub_app_users` (the default seed view).
+-- view's key and the table(s) its reports read. Access and download are a single
+-- tier, so only the collection access group (its view_key) needs SELECT on the
+-- data — every member who can view may also download. Example view_key =
+-- `download_hub_app_users` (the default seed view).
 -- ---------------------------------------------------------------------------
 GRANT USE CATALOG ON CATALOG main TO `download_hub_app_users`;
 GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_app_users`;
 GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_app_users`;
 
-GRANT USE CATALOG ON CATALOG main TO `download_hub_download_users`;
-GRANT USE SCHEMA ON SCHEMA main.default TO `download_hub_download_users`;
-GRANT SELECT ON TABLE main.default.daily_metrics TO `download_hub_download_users`;
-
 -- Large CSV delivery (only when APP_EXPORT_VOLUME is configured). Keep the
--- volume private: grant only the app SP, not end-user download groups.
+-- volume private: grant only the app SP, not end-user groups.
 -- GRANT USE CATALOG ON CATALOG <catalog>
 --   TO `<APP_SERVICE_PRINCIPAL_CLIENT_ID>`;
 -- GRANT USE SCHEMA ON SCHEMA <catalog>.<schema>

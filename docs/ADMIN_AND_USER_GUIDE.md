@@ -27,8 +27,7 @@ general file browser. It is a governed presentation and delivery layer.
 |---|---|
 | Resource | A query-backed result or pinned Unity Catalog volume folder. Legacy code may call it a report. |
 | Resource collection | An ordered group of resources. Its collection key is also its Databricks access-group name. |
-| Collection access group | Members may discover and open that collection, subject to OBO data privileges. |
-| Download group | Members may see the collection and request downloads. It is explicit or derived as `<collection_key>_dl`. |
+| Collection access group | Members may discover, open, **and download** that collection's resources, subject to OBO data privileges. Access and download are a single tier — there is no separate download group. |
 | Administrator group | Members may open `/admin`; this alone grants no source-data access. |
 | OBO | Databricks executes the data operation using the signed-in user's forwarded OAuth token. |
 | App service principal | App identity used for registry/audit writes and private export storage, not to elevate user reads. |
@@ -41,7 +40,7 @@ For compatibility, storage retains `report_config`, `report_view`, and
 A user reaches data only when every applicable layer allows it:
 
 1. The user has `CAN USE` on the Databricks App.
-2. The user belongs to the collection access group or its download group.
+2. The user belongs to the collection access group (which governs both viewing and downloading).
 3. Query users have `CAN USE` on the configured SQL warehouse.
 4. The user has required Unity Catalog privileges: normally `USE CATALOG`, `USE
    SCHEMA`, and `SELECT`, `EXECUTE`, or `READ VOLUME`.
@@ -145,7 +144,7 @@ Follow [ADMIN_SETUP.md](ADMIN_SETUP.md) for commands and SQL. In summary:
 1. Confirm Unity Catalog, identity federation, a SQL warehouse, bundle access,
    and an authorized deployment operator.
 2. Choose the app catalog/schema, warehouse, groups, and private export volume.
-3. Create administrator, initial collection access, and download groups.
+3. Create administrator and initial collection access groups.
 4. Grant app and warehouse `CAN USE` as applicable.
 5. Configure matching values in `databricks.yml` and `src/app/app.yaml`.
 6. Validate/deploy, run schema initialization, and start the app.
@@ -168,8 +167,9 @@ Treat onboarding as a governance and access change, not only a UI change.
    expected row/export size, refresh expectations, and support contact.
 2. Choose query or pinned-volume resource type.
 3. Reuse a collection only when audience and handling rules match; otherwise
-   create a collection access group and normally its `_dl` group.
-4. Decide separately whether downloads are permitted.
+   create a collection access group.
+4. Note that access and download are a single tier: anyone who can open the
+   collection may download it (subject to the global kill switch).
 
 ### Databricks configuration
 
@@ -187,9 +187,10 @@ Treat onboarding as a governance and access change, not only a UI change.
    columns, labels, formats, aggregations, filters, and order. Dates are ordinary
    selected filters.
 3. For a volume, pin a `/Volumes/<catalog>/<schema>/<volume>/...` root.
-4. Override the download group only when `<collection_key>_dl` is unsuitable.
+4. No separate download group is needed — any member of the collection's access
+   group may download, subject to the global kill switch and OBO data privileges.
 5. Save disabled when practical, check `config_audit`, validate, then enable.
-6. Verify collection-only, download, and unauthorized identities; filters,
+6. Verify authorized and unauthorized identities; filters,
    empty results, errors, direct downloads, large CSV, and stable collection URL.
 7. Record owner, review date, retention expectations, and support path.
 

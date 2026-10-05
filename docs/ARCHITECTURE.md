@@ -92,7 +92,7 @@ The ONLY place where the SDK, templates, async/await, and HTTP semantics appear.
 - `extract_user_token()` — read X-Forwarded-Access-Token header (raise 401 if absent)
 - `extract_user_email()` — read X-Forwarded-User header (fallback to "unknown")
 - `is_member()` — check if user is in a Databricks group
-- `effective_download_group()` — resolve report's download_group or fall back to default
+- `can_view_report()` — report access predicate (collection access group or system admin); also governs download, since access and download are a single tier
 
 **`reports.py`** — Config model & query builders
 - `parse_report_config()` — parse row dict → ReportConfig dataclass (kind, source_query, volume_root, columns incl. aggregates)
@@ -206,14 +206,19 @@ The Databricks Apps runtime also injects the app service principal's OAuth crede
 
 ### Download gating
 
-Download is allowed only when BOTH conditions are true:
+Access and download are a single tier — every user who can view a report may also
+download it. Download is allowed only when BOTH conditions are true:
 
 1. **Kill switch:** `downloads_enabled(DOWNLOADS_ENABLED)` is true (default true; false for `false`/`0`/`no`/`off`/empty)
-2. **Group membership:** user is a member of the report's **effective download group**
-   - If `report.download_group` is set (non-NULL, non-empty after strip), that's the effective group
-   - Otherwise, derive `<view_key><DOWNLOAD_GROUP_SUFFIX>` (default suffix `_dl`)
+2. **Report access:** `can_view_report(me(), report)` — the user is a member of the collection's access group (its `view_key`) or a system admin
 
-The membership check is re-done server-side on every `POST /download` (defense in depth). The UI panel is never trusted on its own.
+`can_download = downloads_enabled(...) AND can_view_report(me(), report)`. There is
+no separate download group: the former derived `<view_key>_dl` download group and
+the `effective_download_group` / `DOWNLOAD_GROUP_SUFFIX` machinery have been
+removed. The `report_config.download_group` column remains for schema
+compatibility but is unused and no longer consulted for gating.
+
+The access check is re-done server-side on every `POST /download` (defense in depth). The UI panel is never trusted on its own.
 
 ---
 

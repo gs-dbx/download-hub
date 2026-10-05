@@ -43,7 +43,7 @@ INSERT INTO main.default.report_config VALUES (
   '[{"name":"amount","label":"Amount","format":"int"}]',             -- columns_json (optional; empty = all cols)
   '[{"field":"report_date","label":"Report date"},{"field":"region","label":"Region"}]', -- filters_json
   NULL, 1, true,                                                     -- order_by, display_order, enabled
-  NULL,                                                              -- download_group (NULL = derive <view_key>_dl)
+  NULL,                                                              -- download_group (legacy/unused; access == download, so leave NULL)
   'my_view', 'query', '',                                            -- view_key, kind ('query'|'volume'), volume_root
   current_timestamp(), 'admin@org'
 )

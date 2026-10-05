@@ -2,7 +2,7 @@
   _download.html — the generic download acknowledgement modal (LOCKED L7).
 
   Included by report.html for ANY report when can_download is true. POST /download
-  re-checks the report's effective download group + the kill switch server-side.
+  re-checks the report's access (can_view_report) + the kill switch server-side.
   The hidden report_id/search + one hidden input per report.filters mirror
   the live controls (kept in sync by app.js) so the export matches the on-screen
   view.
@@ -68,9 +68,10 @@
 
         {#
           Async status panel. All downloads are queued: on submit app.js reveals
-          this with "being prepared", polls the job, then reveals the Download
-          button (a link to GET /download/retrieve?job_id=…) when it's ready. The
-          "My downloads" link always lets the user leave and track it there.
+          this with "being prepared" immediately (before the POST returns), then
+          once the job is queued it reveals the "My downloads" link so the user
+          can leave and track it there, and finally the Download button (a link to
+          GET /download/retrieve?job_id=…) when the file is ready.
         #}
         <div class="usa-alert usa-alert--info margin-top-2"
              data-role="download-status" role="status" hidden>
@@ -79,9 +80,12 @@
               Your download is being prepared…
             </p>
             {# Ready-state actions: the primary Download link (revealed by app.js
-               when the job is ready) and a secondary outline link to My downloads,
-               both aligned on one row (wraps on narrow screens). Styled as buttons
-               so the secondary action reads as navy, not a stray purple link. #}
+               when the job is ready) and a secondary outline link to My downloads.
+               Both start hidden: the status panel shows "being prepared" the
+               instant the button is pressed, and app.js reveals "My downloads"
+               only once the job is actually queued (and the Download link only
+               once the file is ready). Aligned on one row (wraps on narrow
+               screens); styled as buttons so the secondary action reads as navy. #}
             <div class="app-dl-actions margin-top-2">
               <a class="usa-button" data-role="download-ready-link"
                  href="#" download hidden>
@@ -91,7 +95,7 @@
                 Download
               </a>
               <a class="usa-button usa-button--outline" href="/downloads"
-                 data-role="download-downloads-link">
+                 data-role="download-downloads-link" hidden>
                 <svg class="usa-icon" aria-hidden="true" focusable="false" role="img">
                   <use xlink:href="/static/uswds/img/sprite.svg#list"></use>
                 </svg>
